@@ -1,0 +1,334 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: "1.22"
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: nomad-build-service
+
+jobs:
+  # Code quality checks
+  test:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests
+      run: |
+        go test -v -race -coverprofile=coverage.out ./...
+        go tool cover -func=coverage.out
+    
+    - name: Run linter
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: v1.54.2
+        args: --timeout 5m
+    
+    - name: Security scan
+      run: |
+        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        gosec ./...
+    
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+    
+    - name: Archive test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          coverage.out
+          coverage.html
+
+  # Build and Docker image creation
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Build binaries
+      run: |
+        make build-all
+        ls -la bin/
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.DOCKER_REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Archive binaries
+      uses: actions/upload-artifact@v3
+      with:
+        name: binaries
+        path: bin/
+
+  # Integration tests with infrastructure
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    services:
+      consul:
+        image: hashicorp/consul:1.16
+        ports:
+          - 8500:8500
+        options: >-
+          --health-cmd "curl -f http://localhost:8500/v1/status/leader"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        env:
+          CONSUL_BIND_INTERFACE: eth0
+    
+      vault:
+        image: hashicorp/vault:1.15
+        ports:
+          - 8200:8200
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8200/v1/sys/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: myroot
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Wait for services
+      run: |
+        sleep 30
+        curl -f http://localhost:8500/v1/status/leader
+        curl -f http://localhost:8200/v1/sys/health
+    
+    - name: Setup test data in Vault
+      run: |
+        export VAULT_ADDR=http://localhost:8200
+        export VAULT_TOKEN=myroot
+        
+        # Enable KV secrets engine
+        vault secrets enable -path=secret kv-v2
+        
+        # Store test credentials
+        vault kv put secret/test/git-creds username="test" password="test"
+        vault kv put secret/test/registry-creds username="test" password="test"
+    
+    - name: Setup test data in Consul
+      run: |
+        curl -X PUT http://localhost:8500/v1/kv/nomad-build-service-test/config/build_timeout -d "5m"
+        curl -X PUT http://localhost:8500/v1/kv/nomad-build-service-test/config/test_timeout -d "2m"
+    
+    - name: Run integration tests
+      env:
+        CONSUL_HTTP_ADDR: localhost:8500
+        VAULT_ADDR: http://localhost:8200
+        VAULT_TOKEN: myroot
+        REGISTRY_URL: localhost:5000
+      run: |
+        go test -v -tags=integration ./test/integration/
+    
+    - name: Archive integration test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-results
+        path: test-results/
+
+  # Security scanning
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ needs.build.outputs.image-tag }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Deployment to development environment
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [build, integration-test]
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure deployment
+      run: |
+        echo "Deploying to development environment"
+        echo "Image: ${{ needs.build.outputs.image-tag }}"
+    
+    # Add deployment steps here based on your infrastructure
+    # Examples:
+    # - Deploy to Kubernetes
+    # - Deploy to Nomad
+    # - Update Helm charts
+    # - Run smoke tests
+
+  # Deployment to production environment
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, integration-test, security]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure production deployment
+      run: |
+        echo "Deploying to production environment"
+        echo "Image: ${{ needs.build.outputs.image-tag }}"
+    
+    # Add production deployment steps here
+    # Examples:
+    # - Blue/green deployment
+    # - Canary deployment
+    # - Database migrations
+    # - Health checks
+
+  # Create GitHub release for tagged versions
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build, integration-test, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download binaries
+      uses: actions/download-artifact@v3
+      with:
+        name: binaries
+        path: bin/
+    
+    - name: Generate changelog
+      run: |
+        # Generate changelog from git commits
+        git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s" > CHANGELOG.md
+    
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body_path: CHANGELOG.md
+        draft: false
+        prerelease: false
+    
+    - name: Upload Release Assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./bin/nomad-build-service-linux-amd64
+        asset_name: nomad-build-service-linux-amd64
+        asset_content_type: application/octet-stream
