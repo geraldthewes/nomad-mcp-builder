@@ -12,7 +12,7 @@ This product is designed for agentic code development, offloading resource-inten
 
 ### 1.2 Target Audience
 
-* **AI Coding Agents:** The primary user, interacting via the MCP protocol for secure, contextual, and automated build-test-deploy workflows.  
+* **AI Coding Agents:** The primary user, interacting via the MCP protocol for secure, contextual, and automated build-test-deploy workflows. The service provides both polling and WebSocket interfaces to accommodate different agent capabilities and preferences.  
 * **Developers:** Individuals building containerized applications environments who can leverage the service for standardized builds.
 
 ### 1.3 Business Goals
@@ -57,7 +57,8 @@ This product is designed for agentic code development, offloading resource-inten
 * The agent will commit their changes to a new build branch, publish their changes to the git repo before evoking the build. Further changes made until  the build succeeds and tests passes shall be made by the agent on the same branch.   
 * The agent submits a build request via an MCP endpoint via a configuration descriptor to be documented.  
 * The server validates the inputs and generates a unique job ID.  
-* **Secrets Handling:** The agent passes references (e.g., `nomad/jobs/my-repo-secret`) to pre-populated secrets in Nomad's Vault for private Git repositories and container registries. The service itself does not handle raw credentials.  
+* **Secrets Handling:** The agent passes references (e.g., `nomad/jobs/my-repo-secret`) to pre-populated secrets in Nomad's Vault for private Git repositories and container registries. The service itself does not handle raw credentials.
+* **Git Authentication:** Supports SSH keys and Personal Access Tokens via Vault secret injection, both referenced in job config as `git_credentials_path`.  
 * Once the build and the test passes, the branch will be merged by the agent back in the current development branch.
 
 #### FR1.1: MCP API Contract (Example)
@@ -123,13 +124,42 @@ A build submission request from the agent could look like this:
 
 * **Killing a Job**: The agent or the user should be able to kill  a build or test job at any time.
 
-#### FR7: Query Endpoints
+#### FR7: Query and Streaming Endpoints
 
 * **`submitJob`:** Accepts a JSON payload (see FR1.1) and returns a job ID.  
-* **`getStatus`:** Takes a job ID and returns the current status of the job.  
-* **`getLogs`:** Takes a job ID and returns the logs, preferably structured by phase (e.g., `{"build": "...", "test": "..."}`).  
-* **killJob**: takes a job ID and terminates the build or test run.  
-* **Cleanup:** Cleanup any residual resources from this build
+* **`getStatus`:** Takes a job ID and returns the current status with basic metrics.  
+* **`getLogs`:** Takes a job ID and returns phase-specific logs (e.g., `{"build": "...", "test": "..."}`).  
+* **`streamLogs`:** WebSocket endpoint for real-time log streaming during builds.
+* **`killJob`:** Terminates running jobs and cleans up resources.  
+* **`cleanup`:** Removes zombie jobs and temporary artifacts.
+* **`health`:** Service health check endpoint for monitoring.
+* **`ready`:** Readiness probe endpoint (Consul/Vault connectivity).
+
+#### FR8: Intermediate Image Handling
+
+* **Registry Workflow:** Use private Docker registry for sharing images between build/test/publish phases.
+* **Build Phase:** Tags temporary image as `<registry>/temp/<job-id>:latest` and pushes to registry.
+* **Test Phase:** Pulls temporary image from registry for test execution.
+* **Publish Phase:** Retags temporary image and pushes to final destination.
+* **Cleanup:** Removes temporary images after job completion or failure.
+
+#### FR9: Monitoring and Metrics
+
+* **Prometheus Metrics:** Expose metrics on `/metrics` endpoint including:
+  * `build_duration_seconds`: Build phase timing
+  * `test_duration_seconds`: Test phase timing  
+  * `publish_duration_seconds`: Publish phase timing
+  * `job_success_rate`: Success rate by time window
+  * `concurrent_jobs_total`: Current running jobs
+  * `resource_usage`: CPU/memory consumption per job
+* **Status Integration:** Include basic metrics in `getStatus` response for agent visibility.
+
+#### FR10: Build History (Optional)
+
+* **Record Keeping:** Maintain last 50 build records in Consul KV at `nomad-build-service/history/<job-id>`.
+* **Data Stored:** Job config, status, duration, basic metrics.
+* **Access:** Available via `getHistory` endpoint for debugging.
+* **Cleanup:** Automatic removal of records older than 30 days.
 
 ### 3.2 Non-Functional Requirements
 
@@ -157,7 +187,8 @@ A build submission request from the agent could look like this:
 #### NFR3: Reliability
 
 * **Atomicity:** The entire build-test-publish workflow is treated as a single, atomic operation. If any phase fails, the entire job is considered failed. There is no mechanism to retry a single phase; the agent must resubmit the entire job.  
-* **Cleanup:** Nomad batch jobs should be configured with a garbage collection policy (`gc.enabled = true`) to ensure that job specifications and allocations are automatically removed from the cluster after completion or failure. Temporary images must also be cleaned up. The agent should also be able to initiate a cleanup
+* **Cleanup:** Nomad batch jobs should be configured with a garbage collection policy (`gc.enabled = true`) to ensure that job specifications and allocations are automatically removed from the cluster after completion or failure. Temporary images must also be cleaned up. The agent should also be able to initiate a cleanup.
+* **Zombie Job Management:** On service startup, query Nomad for orphaned jobs with service prefix. Provide `cleanupZombies` endpoint to terminate abandoned jobs. Automatic cleanup of jobs running longer than configured timeout.
 
 #### NFR4: Usability
 
@@ -174,16 +205,41 @@ A build submission request from the agent could look like this:
 * **Go:** Version 1.22+  
 * **Nomad:** Version 1.10+ (with Vault integration enabled)  
 * **Buildah:** Latest stable version (`quay.io/buildah/stable`)  
-* **MCP:** A modern Go implementation of the MCP protocol.
+* **MCP:** Official MCP Go SDK from https://github.com/modelcontextprotocol/go-sdk
+
+#### NFR7: Container Requirements
+
+* **Buildah Configuration:** Nomad job template must include:
+  * User namespace mappings: `user = "build:10000:65536"`
+  * Fuse device access: `device "/dev/fuse"`  
+  * Storage configuration: mount persistent volume to `/var/lib/containers`
+  * Isolation mode: `BUILDAH_ISOLATION=chroot`
+  * Privilege escalation: `allow_privilege_escalation = true` for rootless mode
+* **Build Caching:** Host volume for layer caching: `/opt/nomad/data/buildah-cache:/var/lib/containers`
+* **Setup Documentation:** Complete instructions for configuring Nomad clients with required capabilities and volume access.
+
+#### NFR8: Configuration Management
+
+* **Service Configuration:** Via Consul KV store at `nomad-build-service/config/`
+* **Secrets Management:** Exclusively via Vault at paths like `nomad/jobs/<service>-secrets`  
+* **Environment Injection:** Support consul-template pattern for dynamic configuration
+* **Configuration Keys:**
+  * `default_resource_limits`: CPU/memory limits for jobs
+  * `build_timeout`: Maximum build duration (default: 30 minutes)
+  * `test_timeout`: Maximum test duration (default: 15 minutes)
+  * `registry_config`: Default registry settings
 
 ## 4\. Technical Stack
 
 * **Language:** Golang  
 * **Key Libraries:**  
   * Nomad API: `github.com/hashicorp/nomad/api`  
-  * MCP: A stable Go MCP library for WebSocket/JSON communication.  
+  * MCP: Official MCP Go SDK (`github.com/modelcontextprotocol/go-sdk`)  
+  * Configuration: `github.com/hashicorp/consul/api`  
+  * Secrets: `github.com/hashicorp/vault/api`  
+  * Metrics: `github.com/prometheus/client_golang`  
   * Logging: `github.com/sirupsen/logrus`  
-  * HTTP/WebSockets: Standard `net/http` or a library like `gorilla/websocket`.  
+  * HTTP/WebSockets: Standard `net/http` or `gorilla/websocket`  
 * **Deployment:** The service itself will be deployed as a Dockerized application running as a Nomad service job, exposing its API port.  
 * **Testing:** Unit tests for MCP handlers and integration tests using a mocked Nomad API.
 
