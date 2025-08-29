@@ -76,6 +76,13 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
    export NOMAD_REGION=your-region           # Default: global, check with 'nomad status'
    export VAULT_ADDR=http://your-vault:8200
    export SERVER_PORT=8080
+   
+   # Registry configuration
+   export REGISTRY_URL=localhost:5000        # For local registry on port 5000
+   # export REGISTRY_URL=registry-1.docker.io  # For Docker Hub
+   # export REGISTRY_URL=10.0.1.12:5000       # For registry on specific host:port
+   export REGISTRY_TEMP_PREFIX=temp
+   # Registry credentials not needed for public registries
    ```
 
 3. **Run the Service**
@@ -99,6 +106,10 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 | `BUILD_TIMEOUT` | `30m` | Maximum build duration |
 | `TEST_TIMEOUT` | `15m` | Maximum test duration |
 | `METRICS_PORT` | `9090` | Prometheus metrics port |
+| `REGISTRY_URL` | _(empty)_ | Docker registry URL (e.g., `docker.io`, `localhost:5000`, `registry.example.com:5000`) |
+| `REGISTRY_TEMP_PREFIX` | `temp` | Prefix for temporary images in registry |
+| `REGISTRY_USERNAME` | _(empty)_ | Registry username (optional for public registries) |
+| `REGISTRY_PASSWORD` | _(empty)_ | Registry password (optional for public registries) |
 
 ### Consul Configuration
 
@@ -113,19 +124,30 @@ consul kv put nomad-build-service/config/default_resource_limits/memory "4096"
 
 ### Vault Secrets
 
-Store credentials in Vault for Git and registry access:
+Store credentials in Vault for Git and registry access.
+
+**Note**: This service requires Vault KV v2 (default in newer Vault versions). The code uses `.Data.data.` paths in templates which are specific to KV v2.
 
 ```bash
-# Git credentials
+# Check if you're using KV v2 (should show "version: 2")
+vault kv metadata secret/
+
+# Git credentials (KV v2)
 vault kv put secret/nomad/jobs/git-credentials \
   username="your-git-user" \
   password="your-git-token" \
   ssh_key="$(cat ~/.ssh/id_rsa)"
 
-# Registry credentials  
+# Registry credentials (KV v2) - ONLY needed for private registries
+# For Docker Hub public images, you can skip this step
 vault kv put secret/nomad/jobs/registry-credentials \
   username="your-registry-user" \
   password="your-registry-password"
+
+# Verify secrets were stored correctly
+vault kv get secret/nomad/jobs/git-credentials
+# Only if you created registry credentials:
+# vault kv get secret/nomad/jobs/registry-credentials
 ```
 
 ## Nomad Client Setup
@@ -271,6 +293,99 @@ job_success_rate{window="24h"}
 
 # Current resource utilization
 resource_usage{resource_type="cpu"}
+```
+
+## Deployment
+
+### Building Docker Image
+
+First, build and push a Docker image:
+
+```bash
+# Build the binary
+go build -o nomad-build-service ./cmd/server
+
+# Create Dockerfile (example)
+cat > Dockerfile << 'EOF'
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY nomad-build-service .
+EXPOSE 8080 9090 8081
+CMD ["./nomad-build-service"]
+EOF
+
+# Build and push image
+docker build -t your-registry:5000/nomad-build-service:latest .
+docker push your-registry:5000/nomad-build-service:latest
+```
+
+### Deploying with Nomad
+
+1. **Update the job file variables**:
+   ```bash
+   # Edit nomad-build-service.nomad and update:
+   # - datacenters = ["your-datacenter"] 
+   # - region = "your-region"
+   # - REGISTRY_URL in env section
+   ```
+
+2. **Set deployment variables**:
+   ```bash
+   export REGISTRY_URL=your-registry:5000
+   ```
+
+3. **Deploy to Nomad**:
+   ```bash
+   # Plan the deployment
+   nomad job plan nomad-build-service.nomad
+   
+   # Deploy the service
+   nomad job run nomad-build-service.nomad
+   
+   # Check status
+   nomad job status nomad-build-service
+   ```
+
+4. **Verify service registration**:
+   ```bash
+   # Check Consul services
+   consul catalog services
+   
+   # Check specific service
+   consul catalog service nomad-build-service
+   consul catalog service nomad-build-service-metrics
+   ```
+
+5. **Configure Prometheus** to discover the service:
+   ```yaml
+   scrape_configs:
+     - job_name: 'nomad-build-service'
+       consul_sd_configs:
+         - server: 'your-consul:8500'
+           services: ['nomad-build-service-metrics']
+       relabel_configs:
+         - source_labels: [__meta_consul_service_metadata_metrics_path]
+           target_label: __metrics_path__
+           regex: (.+)
+   ```
+
+### Service Endpoints
+
+Once deployed, the service will be available at:
+- **API**: `http://service-ip:8080` (MCP endpoints)  
+- **Health**: `http://service-ip:8081/health`
+- **Metrics**: `http://service-ip:9090/metrics` (Prometheus)
+
+### Scaling
+
+To scale the service:
+```bash
+# Update count in nomad-build-service.nomad
+count = 3
+
+# Redeploy
+nomad job run nomad-build-service.nomad
 ```
 
 ## Development
