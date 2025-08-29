@@ -57,10 +57,23 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 
 2. **Configuration**
    
+   First, check your cluster configuration:
+   ```bash
+   # Check Consul datacenter name
+   consul members
+   
+   # Check Nomad region name  
+   nomad status
+   # or
+   curl http://your-nomad:4646/v1/regions
+   ```
+   
    Set environment variables or use Consul KV:
    ```bash
    export NOMAD_ADDR=http://your-nomad:4646
    export CONSUL_HTTP_ADDR=your-consul:8500
+   export CONSUL_DATACENTER=your-datacenter  # Default: dc1, check with 'consul members'
+   export NOMAD_REGION=your-region           # Default: global, check with 'nomad status'
    export VAULT_ADDR=http://your-vault:8200
    export SERVER_PORT=8080
    ```
@@ -79,7 +92,9 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 | `SERVER_HOST` | `0.0.0.0` | Server bind address |
 | `SERVER_PORT` | `8080` | Server port |
 | `NOMAD_ADDR` | `http://localhost:4646` | Nomad API address |
+| `NOMAD_REGION` | `global` | Nomad region name |
 | `CONSUL_HTTP_ADDR` | `localhost:8500` | Consul API address |
+| `CONSUL_DATACENTER` | `dc1` | Consul datacenter name |
 | `VAULT_ADDR` | `http://localhost:8200` | Vault API address |
 | `BUILD_TIMEOUT` | `30m` | Maximum build duration |
 | `TEST_TIMEOUT` | `15m` | Maximum test duration |
