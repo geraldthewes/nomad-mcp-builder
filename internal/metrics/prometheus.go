@@ -1,11 +1,13 @@
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -112,7 +114,7 @@ func NewMetrics() *Metrics {
 		&m.testDuration,
 		&m.publishDuration,
 		&m.jobSuccessRate,
-		&m.concurrentJobs,
+		m.concurrentJobs,
 		&m.totalJobs,
 		&m.resourceUsage,
 		&m.healthCheck,
@@ -210,9 +212,9 @@ func (m *Metrics) UpdateHealthCheck(service string, healthy bool) {
 
 // GetConcurrentJobs returns the current number of concurrent jobs
 func (m *Metrics) GetConcurrentJobs() float64 {
-	dto := &prometheus.Payload{}
-	m.concurrentJobs.Write(dto)
-	return dto.GetGauge().GetValue()
+	metric := &dto.Metric{}
+	m.concurrentJobs.Write(metric)
+	return metric.GetGauge().GetValue()
 }
 
 // StartMetricsServer starts the Prometheus metrics HTTP server

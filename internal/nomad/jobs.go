@@ -3,6 +3,7 @@ package nomad
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	nomadapi "github.com/hashicorp/nomad/api"
 	
@@ -128,7 +129,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								DestPath:   stringPtr("/secrets/git-creds"),
 								ChangeMode: stringPtr("restart"),
 								VaultGrace: durationPtr("5s"),
-								Data: stringPtr(fmt.Sprintf(`
+								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export GIT_USERNAME="{{ .Data.data.username }}"
 export GIT_PASSWORD="{{ .Data.data.password }}"
@@ -141,7 +142,7 @@ export GIT_SSH_KEY="{{ .Data.data.ssh_key }}"
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
 								VaultGrace: durationPtr("5s"),
-								Data: stringPtr(fmt.Sprintf(`
+								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"
 export REGISTRY_PASSWORD="{{ .Data.data.password }}"
@@ -157,8 +158,6 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 			},
 		},
 		// Set job timeout
-		ConsulToken: stringPtr(""),
-		VaultToken:  stringPtr(""),
 		Stop:        boolPtr(true),
 	}
 	
@@ -282,7 +281,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
 								VaultGrace: durationPtr("5s"),
-								Data: stringPtr(fmt.Sprintf(`
+								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"
 export REGISTRY_PASSWORD="{{ .Data.data.password }}"
@@ -395,7 +394,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
 								VaultGrace: durationPtr("5s"),
-								Data: stringPtr(fmt.Sprintf(`
+								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"
 export REGISTRY_PASSWORD="{{ .Data.data.password }}"

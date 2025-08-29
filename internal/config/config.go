@@ -7,7 +7,6 @@ import (
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
-	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/sirupsen/logrus"
 )
 

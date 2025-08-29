@@ -299,23 +299,24 @@ func (nc *Client) getJobLogs(nomadJobID string) ([]string, error) {
 	
 	var logs []string
 	for _, alloc := range allocs {
-		// Get logs from the allocation
-		logStream, err := nc.client.AllocFS().Logs(alloc, false, "main", "stdout", "start", 0, nil, nil)
+		// Get full allocation details
+		allocDetail, _, err := nc.client.Allocations().Info(alloc.ID, nil)
 		if err != nil {
 			continue
 		}
-		defer logStream.Close()
 		
-		// Read logs (simplified - in production you'd want to handle this better)
-		buffer := make([]byte, 1024)
-		for {
-			n, err := logStream.Read(buffer)
-			if n > 0 {
-				logs = append(logs, string(buffer[:n]))
-			}
-			if err != nil {
-				break
-			}
+		// Try to get logs using ReadAt (this is a simplified approach)
+		logReader, err := nc.client.AllocFS().ReadAt(allocDetail, "/alloc/logs/main.stdout.0", 0, 0, nil)
+		if err != nil {
+			continue
+		}
+		defer logReader.Close()
+		
+		// Read the log data
+		buffer := make([]byte, 4096)
+		n, err := logReader.Read(buffer)
+		if err == nil && n > 0 {
+			logs = append(logs, string(buffer[:n]))
 		}
 	}
 	
