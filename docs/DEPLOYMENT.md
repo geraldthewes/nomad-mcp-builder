@@ -160,25 +160,20 @@ vault policy write nomad-build-service nomad-build-service-policy.hcl
 Store service secrets:
 
 ```bash
-# Git credentials template
-vault kv put secret/nomad/jobs/git-template \
-  username="" \
-  password="" \
-  ssh_key=""
+# Git credentials (matches README.md and API examples)
+vault kv put secret/nomad/jobs/git-credentials \
+  username="your-git-user" \
+  password="your-git-token" \
+  ssh_key="$(cat ~/.ssh/id_rsa)"
 
-# Registry credentials template
-vault kv put secret/nomad/jobs/registry-template \
-  username="" \
-  password=""
+# Registry credentials (matches README.md and API examples)
+vault kv put secret/nomad/jobs/registry-credentials \
+  username="your-registry-user" \
+  password="your-registry-password"
 
-# Example project credentials
-vault kv put secret/nomad/jobs/example-project-git \
-  username="git-user" \
-  password="ghp_xxxxxxxxxxxx"
-
-vault kv put secret/nomad/jobs/example-project-registry \
-  username="registry-user" \
-  password="registry-password"
+# For public repositories and registries, you can use empty credentials:
+# vault kv put secret/nomad/jobs/git-credentials username="" password="" ssh_key=""
+# vault kv put secret/nomad/jobs/registry-credentials username="" password=""
 ```
 
 ### 4. Consul Configuration
