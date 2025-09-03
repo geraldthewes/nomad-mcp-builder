@@ -34,6 +34,38 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
                    └─────────────┘
 ```
 
+## MCP Transport
+
+This server now supports **both** standard MCP transports and custom HTTP/JSON endpoints:
+
+### Standard MCP Protocol Support ✅
+
+- **JSON-RPC over HTTP** at `/mcp` endpoint
+- **Streamable HTTP transport** at `/mcp/stream` endpoint  
+- **Full MCP 2024-11-05 compliance** with tools/list, tools/call, initialize
+- **Compatible with MCP Inspector** and standard MCP clients
+- **Future-proof transport** using modern bidirectional HTTP streaming
+
+### Custom HTTP/JSON API (Legacy)
+
+- **HTTP POST requests** with JSON payloads at `/mcp/*` paths
+- **Standard HTTP responses** with JSON results  
+- **WebSocket connections** for real-time log streaming at `/mcp/streamLogs`
+- **RESTful endpoints** for direct curl/Postman testing
+
+### Connection Methods
+
+**For MCP Inspector (Recommended):**
+- URL: `http://localhost:8080/mcp/stream`
+- Transport: Streamable HTTP (modern, bidirectional)
+
+**For Standard MCP Clients:**
+- URL: `http://localhost:8080/mcp`  
+- Transport: JSON-RPC over HTTP (simple request/response)
+
+**For Direct HTTP Testing:**
+- Use existing `/mcp/submitJob`, `/mcp/getStatus` etc. endpoints
+
 ## Quick Start
 
 ### Prerequisites
@@ -266,6 +298,44 @@ ws.onmessage = function(event) {
   console.log(`[${log.phase}] ${log.message}`);
 };
 ```
+
+## Testing with MCP Inspector
+
+You can test the MCP endpoints using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+1. **Start your build service:**
+   ```bash
+   ./nomad-build-service
+   ```
+
+2. **Open MCP Inspector** in your browser
+
+3. **Connect to the service:**
+   - **URL:** `http://localhost:8080/mcp/stream`
+   - **Transport:** Streamable HTTP
+
+4. **Available MCP Tools:**
+   - `submitJob` - Submit a new build job
+   - `getStatus` - Check job status  
+   - `getLogs` - Retrieve job logs
+   - `killJob` - Terminate a running job
+   - `cleanup` - Clean up job resources
+   - `getHistory` - Get build history
+
+5. **Example MCP Tool Call:**
+   ```json
+   {
+     "name": "submitJob",
+     "arguments": {
+       "repo_url": "https://github.com/example/repo.git",
+       "registry_url": "registry.example.com/myapp",
+       "image_tags": ["latest", "v1.0.0"],
+       "test_commands": ["npm test", "npm run lint"]
+     }
+   }
+   ```
+
+The MCP Inspector will show you the available tools, their schemas, and allow you to test tool calls interactively.
 
 ## Monitoring
 

@@ -52,7 +52,7 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	
-	// Register MCP endpoints
+	// Register MCP endpoints (HTTP/JSON API)
 	mux.HandleFunc("/mcp/submitJob", s.handleSubmitJob)
 	mux.HandleFunc("/mcp/getStatus", s.handleGetStatus)
 	mux.HandleFunc("/mcp/getLogs", s.handleGetLogs)
@@ -60,6 +60,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/mcp/killJob", s.handleKillJob)
 	mux.HandleFunc("/mcp/cleanup", s.handleCleanup)
 	mux.HandleFunc("/mcp/getHistory", s.handleGetHistory)
+	
+	// Register Standard MCP Protocol endpoints
+	mux.HandleFunc("/mcp", s.handleMCPRequest)     // JSON-RPC over HTTP
+	mux.HandleFunc("/mcp/stream", s.handleMCPStream) // Streamable HTTP transport
 	
 	// Health check endpoints
 	mux.HandleFunc("/health", s.handleHealth)
@@ -557,4 +561,390 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// MCP Protocol Handlers
+
+// handleMCPRequest processes standard MCP JSON-RPC requests
+func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var mcpReq MCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&mcpReq); err != nil {
+		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
+		s.writeMCPResponse(w, response)
+		return
+	}
+
+	var response MCPResponse
+	switch mcpReq.Method {
+	case "tools/list":
+		response = s.handleMCPToolsList(mcpReq)
+	case "tools/call":
+		response = s.handleMCPToolsCall(mcpReq)
+	case "initialize":
+		response = s.handleMCPInitialize(mcpReq)
+	default:
+		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
+	}
+
+	s.writeMCPResponse(w, response)
+}
+
+// handleMCPStream provides streamable HTTP transport for MCP Inspector and modern clients
+func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
+	// Set headers for streamable HTTP transport
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+
+	// Handle preflight requests
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Handle bidirectional streaming
+	decoder := json.NewDecoder(r.Body)
+	encoder := json.NewEncoder(w)
+
+	for {
+		var mcpReq MCPRequest
+		if err := decoder.Decode(&mcpReq); err != nil {
+			if err.Error() != "EOF" {
+				s.logger.WithError(err).Warn("Error decoding MCP stream request")
+			}
+			break
+		}
+
+		var response MCPResponse
+		switch mcpReq.Method {
+		case "tools/list":
+			response = s.handleMCPToolsList(mcpReq)
+		case "tools/call":
+			response = s.handleMCPToolsCall(mcpReq)
+		case "initialize":
+			response = s.handleMCPInitialize(mcpReq)
+		case "ping":
+			response = s.handleMCPPing(mcpReq)
+		default:
+			response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
+		}
+
+		// Send response immediately over the stream
+		if err := encoder.Encode(response); err != nil {
+			s.logger.WithError(err).Error("Failed to encode MCP stream response")
+			break
+		}
+		flusher.Flush()
+	}
+}
+
+// handleMCPInitialize handles MCP initialization
+func (s *Server) handleMCPInitialize(req MCPRequest) MCPResponse {
+	result := map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{},
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    "nomad-build-service",
+			"version": "2.0.0",
+		},
+	}
+	return NewMCPResponse(req.ID, result)
+}
+
+// handleMCPPing handles ping requests for keep-alive
+func (s *Server) handleMCPPing(req MCPRequest) MCPResponse {
+	result := map[string]interface{}{
+		"status": "pong",
+	}
+	return NewMCPResponse(req.ID, result)
+}
+
+// handleMCPToolsList handles tools/list requests
+func (s *Server) handleMCPToolsList(req MCPRequest) MCPResponse {
+	tools := GetTools()
+	result := ToolListResult{Tools: tools}
+	return NewMCPResponse(req.ID, result)
+}
+
+// handleMCPToolsCall handles tools/call requests by translating to internal API
+func (s *Server) handleMCPToolsCall(req MCPRequest) MCPResponse {
+	params, ok := req.Params.(map[string]interface{})
+	if !ok {
+		return NewMCPErrorResponse(req.ID, MCPErrorInvalidParams, "Invalid params", nil)
+	}
+
+	toolName, ok := params["name"].(string)
+	if !ok {
+		return NewMCPErrorResponse(req.ID, MCPErrorInvalidParams, "Tool name required", nil)
+	}
+
+	arguments, ok := params["arguments"].(map[string]interface{})
+	if !ok {
+		arguments = make(map[string]interface{})
+	}
+
+	switch toolName {
+	case "submitJob":
+		return s.mcpSubmitJob(req.ID, arguments)
+	case "getStatus":
+		return s.mcpGetStatus(req.ID, arguments)
+	case "getLogs":
+		return s.mcpGetLogs(req.ID, arguments)
+	case "killJob":
+		return s.mcpKillJob(req.ID, arguments)
+	case "cleanup":
+		return s.mcpCleanup(req.ID, arguments)
+	case "getHistory":
+		return s.mcpGetHistory(req.ID, arguments)
+	default:
+		return NewMCPErrorResponse(req.ID, MCPErrorMethodNotFound, "Tool not found", toolName)
+	}
+}
+
+// MCP Tool implementations (translate to existing internal methods)
+
+func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPResponse {
+	// Convert MCP arguments to internal job config
+	var jobConfig types.JobConfig
+
+	if owner, ok := args["owner"].(string); ok {
+		jobConfig.Owner = owner
+	}
+	if repoURL, ok := args["repo_url"].(string); ok {
+		jobConfig.RepoURL = repoURL
+	}
+	if gitRef, ok := args["git_ref"].(string); ok {
+		jobConfig.GitRef = gitRef
+	} else {
+		jobConfig.GitRef = "main"
+	}
+	if gitCreds, ok := args["git_credentials_path"].(string); ok {
+		jobConfig.GitCredentialsPath = gitCreds
+	} else {
+		jobConfig.GitCredentialsPath = "secret/nomad/jobs/git-credentials"
+	}
+	if dockerfile, ok := args["dockerfile_path"].(string); ok {
+		jobConfig.DockerfilePath = dockerfile
+	} else {
+		jobConfig.DockerfilePath = "Dockerfile"
+	}
+	if regURL, ok := args["registry_url"].(string); ok {
+		jobConfig.RegistryURL = regURL
+	}
+	if regCreds, ok := args["registry_credentials_path"].(string); ok {
+		jobConfig.RegistryCredentialsPath = regCreds
+	} else {
+		jobConfig.RegistryCredentialsPath = "secret/nomad/jobs/registry-credentials"
+	}
+
+	// Convert image tags
+	if tagsInterface, ok := args["image_tags"].([]interface{}); ok {
+		for _, tag := range tagsInterface {
+			if tagStr, ok := tag.(string); ok {
+				jobConfig.ImageTags = append(jobConfig.ImageTags, tagStr)
+			}
+		}
+	}
+
+	// Convert test commands
+	if testCmdsInterface, ok := args["test_commands"].([]interface{}); ok {
+		for _, cmd := range testCmdsInterface {
+			if cmdStr, ok := cmd.(string); ok {
+				jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
+			}
+		}
+	}
+
+	// Create job using existing logic
+	job, err := s.nomadClient.CreateJob(&jobConfig)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to create job", err.Error())
+	}
+
+	// Store job
+	if err := s.storage.StoreJob(job); err != nil {
+		s.logger.WithError(err).Warn("Failed to store job in storage")
+	}
+
+	result := ToolCallResult{
+		Content: NewMCPJSONContent(map[string]interface{}{
+			"job_id": job.ID,
+			"status": job.Status,
+		}),
+	}
+	return NewMCPResponse(id, result)
+}
+
+func (s *Server) mcpGetStatus(id interface{}, args map[string]interface{}) MCPResponse {
+	jobID, ok := args["job_id"].(string)
+	if !ok {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "job_id required", nil)
+	}
+
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Job not found", err.Error())
+	}
+
+	// Update status from Nomad
+	if updatedJob, err := s.nomadClient.UpdateJobStatus(job); err == nil {
+		job = updatedJob
+		s.storage.UpdateJob(job) // Update storage
+	}
+
+	result := ToolCallResult{
+		Content: NewMCPJSONContent(map[string]interface{}{
+			"job_id": job.ID,
+			"status": job.Status,
+			"error":  job.Error,
+			"phase":  job.FailedPhase,
+		}),
+	}
+	return NewMCPResponse(id, result)
+}
+
+func (s *Server) mcpGetLogs(id interface{}, args map[string]interface{}) MCPResponse {
+	jobID, ok := args["job_id"].(string)
+	if !ok {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "job_id required", nil)
+	}
+
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Job not found", err.Error())
+	}
+
+	logs, err := s.nomadClient.GetJobLogs(job)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to get logs", err.Error())
+	}
+
+	phase, _ := args["phase"].(string)
+	var result interface{}
+	
+	switch phase {
+	case "build":
+		result = logs.Build
+	case "test":
+		result = logs.Test
+	case "publish":
+		result = logs.Publish
+	default:
+		result = logs
+	}
+
+	toolResult := ToolCallResult{
+		Content: NewMCPJSONContent(result),
+	}
+	return NewMCPResponse(id, toolResult)
+}
+
+func (s *Server) mcpKillJob(id interface{}, args map[string]interface{}) MCPResponse {
+	jobID, ok := args["job_id"].(string)
+	if !ok {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "job_id required", nil)
+	}
+
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Job not found", err.Error())
+	}
+
+	if err := s.nomadClient.KillJob(job); err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to kill job", err.Error())
+	}
+
+	// Update job status
+	job.Status = types.StatusFailed
+	job.Error = "Job killed by user"
+	s.storage.UpdateJob(job)
+
+	result := ToolCallResult{
+		Content: NewMCPTextContent("Job terminated successfully"),
+	}
+	return NewMCPResponse(id, result)
+}
+
+func (s *Server) mcpCleanup(id interface{}, args map[string]interface{}) MCPResponse {
+	jobID, ok := args["job_id"].(string)
+	if !ok {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "job_id required", nil)
+	}
+
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Job not found", err.Error())
+	}
+
+	if err := s.nomadClient.CleanupJob(job); err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to cleanup job", err.Error())
+	}
+
+	result := ToolCallResult{
+		Content: NewMCPTextContent("Job resources cleaned up successfully"),
+	}
+	return NewMCPResponse(id, result)
+}
+
+func (s *Server) mcpGetHistory(id interface{}, args map[string]interface{}) MCPResponse {
+	limit := 10
+	if limitFloat, ok := args["limit"].(float64); ok {
+		limit = int(limitFloat)
+	}
+	
+	offset := 0 // Default offset for MCP interface
+
+	history, total, err := s.storage.GetJobHistory(limit, offset)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to get history", err.Error())
+	}
+	
+	// Filter by owner if specified (post-filtering for simplicity)
+	if ownerFilter, ok := args["owner"].(string); ok && ownerFilter != "" {
+		var filteredHistory []types.JobHistory
+		for _, job := range history {
+			if job.Config.Owner == ownerFilter {
+				filteredHistory = append(filteredHistory, job)
+			}
+		}
+		history = filteredHistory
+	}
+
+	result := ToolCallResult{
+		Content: NewMCPJSONContent(map[string]interface{}{
+			"jobs":  history,
+			"total": total,
+		}),
+	}
+	return NewMCPResponse(id, result)
+}
+
+// Helper method to write MCP responses
+func (s *Server) writeMCPResponse(w http.ResponseWriter, response MCPResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.WithError(err).Error("Failed to encode MCP response")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
 }
