@@ -121,6 +121,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
+							Role:       "nomad-workloads", // Use the correct JWT role
 						},
 						Templates: []*nomadapi.Template{
 							// Git credentials template
@@ -270,6 +271,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
+							Role:       "nomad-workloads", // Use the correct JWT role
 						},
 						Templates: []*nomadapi.Template{
 							// Registry credentials for pulling temp image
@@ -381,6 +383,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
+							Role:       "nomad-workloads", // Use the correct JWT role
 						},
 						Templates: []*nomadapi.Template{
 							// Registry credentials
