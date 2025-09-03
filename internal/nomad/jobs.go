@@ -69,7 +69,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		Type:        stringPtr("batch"),
 		Namespace:   stringPtr(nc.config.Nomad.Namespace),
 		Region:      stringPtr(nc.config.Nomad.Region),
-		Datacenters: []string{"dc1"},
+		Datacenters: nc.config.Nomad.Datacenters,
 		Meta: map[string]string{
 			"build-service-job-id": job.ID,
 			"phase":                "build",
@@ -225,7 +225,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		Type:        stringPtr("batch"),
 		Namespace:   stringPtr(nc.config.Nomad.Namespace),
 		Region:      stringPtr(nc.config.Nomad.Region),
-		Datacenters: []string{"dc1"},
+		Datacenters: nc.config.Nomad.Datacenters,
 		Meta: map[string]string{
 			"build-service-job-id": job.ID,
 			"phase":                "test",
@@ -342,7 +342,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		Type:        stringPtr("batch"),
 		Namespace:   stringPtr(nc.config.Nomad.Namespace),
 		Region:      stringPtr(nc.config.Nomad.Region),
-		Datacenters: []string{"dc1"},
+		Datacenters: nc.config.Nomad.Datacenters,
 		Meta: map[string]string{
 			"build-service-job-id": job.ID,
 			"phase":                "publish",
@@ -438,7 +438,7 @@ func (nc *Client) createCleanupJobSpec(job *types.Job) *nomadapi.Job {
 		Type:        stringPtr("batch"),
 		Namespace:   stringPtr(nc.config.Nomad.Namespace),
 		Region:      stringPtr(nc.config.Nomad.Region),
-		Datacenters: []string{"dc1"},
+		Datacenters: nc.config.Nomad.Datacenters,
 		Meta: map[string]string{
 			"build-service-job-id": job.ID,
 			"phase":                "cleanup",

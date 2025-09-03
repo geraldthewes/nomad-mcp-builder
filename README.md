@@ -106,6 +106,7 @@ This server now supports **both** standard MCP transports and custom HTTP/JSON e
    export CONSUL_HTTP_ADDR=your-consul:8500
    export CONSUL_DATACENTER=your-datacenter  # Default: dc1, check with 'consul members'
    export NOMAD_REGION=your-region           # Default: global, check with 'nomad status'
+   export NOMAD_DATACENTERS=cluster          # Default: cluster, check with 'nomad node status'
    export VAULT_ADDR=http://your-vault:8200
    export SERVER_PORT=8080
    
@@ -132,6 +133,7 @@ This server now supports **both** standard MCP transports and custom HTTP/JSON e
 | `SERVER_PORT` | `8080` | Server port |
 | `NOMAD_ADDR` | `http://localhost:4646` | Nomad API address |
 | `NOMAD_REGION` | `global` | Nomad region name |
+| `NOMAD_DATACENTERS` | `cluster` | Nomad datacenters (comma-separated) |
 | `CONSUL_HTTP_ADDR` | `localhost:8500` | Consul API address |
 | `CONSUL_DATACENTER` | `dc1` | Consul datacenter name |
 | `VAULT_ADDR` | `http://localhost:8200` | Vault API address |
@@ -321,6 +323,7 @@ You can test the MCP endpoints using the [MCP Inspector](https://github.com/mode
    - `killJob` - Terminate a running job
    - `cleanup` - Clean up job resources
    - `getHistory` - Get build history
+   - `purgeFailedJob` - Remove zombie/dead jobs from Nomad
 
 5. **Example MCP Tool Call:**
    ```json

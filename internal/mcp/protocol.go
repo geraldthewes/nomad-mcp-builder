@@ -230,6 +230,20 @@ func GetTools() []Tool {
 				},
 			},
 		},
+		{
+			Name:        "purgeFailedJob",
+			Description: "Purge a failed/dead job completely from Nomad (removes zombie jobs)",
+			InputSchema: ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"job_id": map[string]interface{}{
+						"type":        "string",
+						"description": "ID of the job to purge from Nomad",
+					},
+				},
+				Required: []string{"job_id"},
+			},
+		},
 	}
 }
 

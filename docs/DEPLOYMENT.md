@@ -34,7 +34,7 @@ Configure build-capable Nomad clients:
 
 ```hcl
 # nomad-client.hcl
-datacenter = "dc1"
+datacenter = "cluster"  # Update to match your datacenter
 data_dir = "/opt/nomad/data"
 log_level = "INFO"
 server = false
@@ -210,7 +210,7 @@ Deploy as a Nomad service job:
 ```hcl
 # nomad-build-service.nomad
 job "nomad-build-service" {
-  datacenters = ["dc1"]
+  datacenters = ["cluster"]
   type = "service"
   
   constraint {
@@ -279,6 +279,7 @@ job "nomad-build-service" {
         HEALTH_PORT = "${NOMAD_PORT_health}"
         
         NOMAD_ADDR = "http://nomad.service.consul:4646"
+        NOMAD_DATACENTERS = "cluster"
         CONSUL_HTTP_ADDR = "consul.service.consul:8500"
         VAULT_ADDR = "http://vault.service.consul:8200"
         
@@ -341,6 +342,7 @@ services:
       - "8081:8081"
     environment:
       - NOMAD_ADDR=http://nomad:4646
+      - NOMAD_DATACENTERS=cluster
       - CONSUL_HTTP_ADDR=consul:8500
       - VAULT_ADDR=http://vault:8200
       - SERVER_PORT=8080
@@ -405,6 +407,8 @@ spec:
         env:
         - name: NOMAD_ADDR
           value: "http://nomad:4646"
+        - name: NOMAD_DATACENTERS
+          value: "cluster"
         - name: CONSUL_HTTP_ADDR  
           value: "consul:8500"
         - name: VAULT_ADDR

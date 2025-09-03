@@ -282,11 +282,9 @@ func (nc *Client) CleanupFailedJobs(job *types.Job) error {
 	
 	// Clean up build job if it's dead/failed
 	if job.BuildJobID != "" {
-		if status, err := nc.getJobStatus(job.BuildJobID); err == nil && status == "failed" {
+		if status, err := nc.getJobStatus(job.BuildJobID); err == nil && (status == "failed" || status == "dead") {
 			// Purge (force remove) the dead job from Nomad
-			if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, true, &nomadapi.WriteOptions{
-				// Force purge to remove from Nomad completely
-			}); err != nil {
+			if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, true, &nomadapi.WriteOptions{}); err != nil {
 				errors = append(errors, fmt.Sprintf("build job cleanup: %v", err))
 			} else {
 				nc.logger.WithField("job_id", job.BuildJobID).Info("Cleaned up failed build job from Nomad")
@@ -296,8 +294,8 @@ func (nc *Client) CleanupFailedJobs(job *types.Job) error {
 	
 	// Clean up test job if it's dead/failed
 	if job.TestJobID != "" {
-		if status, err := nc.getJobStatus(job.TestJobID); err == nil && status == "failed" {
-			if _, _, err := nc.client.Jobs().Deregister(job.TestJobID, true, nil); err != nil {
+		if status, err := nc.getJobStatus(job.TestJobID); err == nil && (status == "failed" || status == "dead") {
+			if _, _, err := nc.client.Jobs().Deregister(job.TestJobID, true, &nomadapi.WriteOptions{}); err != nil {
 				errors = append(errors, fmt.Sprintf("test job cleanup: %v", err))
 			} else {
 				nc.logger.WithField("job_id", job.TestJobID).Info("Cleaned up failed test job from Nomad")
@@ -307,8 +305,8 @@ func (nc *Client) CleanupFailedJobs(job *types.Job) error {
 	
 	// Clean up publish job if it's dead/failed  
 	if job.PublishJobID != "" {
-		if status, err := nc.getJobStatus(job.PublishJobID); err == nil && status == "failed" {
-			if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, true, nil); err != nil {
+		if status, err := nc.getJobStatus(job.PublishJobID); err == nil && (status == "failed" || status == "dead") {
+			if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, true, &nomadapi.WriteOptions{}); err != nil {
 				errors = append(errors, fmt.Sprintf("publish job cleanup: %v", err))
 			} else {
 				nc.logger.WithField("job_id", job.PublishJobID).Info("Cleaned up failed publish job from Nomad")

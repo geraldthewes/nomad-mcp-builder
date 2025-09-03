@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
@@ -38,10 +39,11 @@ type ServerConfig struct {
 }
 
 type NomadConfig struct {
-	Address   string `json:"address"`
-	Token     string `json:"token"`
-	Region    string `json:"region"`
-	Namespace string `json:"namespace"`
+	Address     string   `json:"address"`
+	Token       string   `json:"token"`
+	Region      string   `json:"region"`
+	Namespace   string   `json:"namespace"`
+	Datacenters []string `json:"datacenters"`
 }
 
 type ConsulConfig struct {
@@ -95,10 +97,11 @@ func Load() (*Config, error) {
 			TLS:  getEnvBool("SERVER_TLS", false),
 		},
 		Nomad: NomadConfig{
-			Address:   getEnv("NOMAD_ADDR", "http://localhost:4646"),
-			Token:     getEnv("NOMAD_TOKEN", ""),
-			Region:    getEnv("NOMAD_REGION", "global"),
-			Namespace: getEnv("NOMAD_NAMESPACE", "default"),
+			Address:     getEnv("NOMAD_ADDR", "http://localhost:4646"),
+			Token:       getEnv("NOMAD_TOKEN", ""),
+			Region:      getEnv("NOMAD_REGION", "global"),
+			Namespace:   getEnv("NOMAD_NAMESPACE", "default"),
+			Datacenters: getEnvStringSlice("NOMAD_DATACENTERS", []string{"cluster"}),
 		},
 		Consul: ConsulConfig{
 			Address:    getEnv("CONSUL_HTTP_ADDR", "localhost:8500"),
@@ -238,6 +241,23 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
+		}
+	}
+	return defaultValue
+}
+
+func getEnvStringSlice(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		// Split by comma and trim spaces
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 	return defaultValue

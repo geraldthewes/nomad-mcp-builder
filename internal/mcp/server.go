@@ -717,6 +717,8 @@ func (s *Server) handleMCPToolsCall(req MCPRequest) MCPResponse {
 		return s.mcpCleanup(req.ID, arguments)
 	case "getHistory":
 		return s.mcpGetHistory(req.ID, arguments)
+	case "purgeFailedJob":
+		return s.mcpPurgeFailedJob(req.ID, arguments)
 	default:
 		return NewMCPErrorResponse(req.ID, MCPErrorMethodNotFound, "Tool not found", toolName)
 	}
@@ -936,6 +938,28 @@ func (s *Server) mcpGetHistory(id interface{}, args map[string]interface{}) MCPR
 			"jobs":  history,
 			"total": total,
 		}),
+	}
+	return NewMCPResponse(id, result)
+}
+
+func (s *Server) mcpPurgeFailedJob(id interface{}, args map[string]interface{}) MCPResponse {
+	jobID, ok := args["job_id"].(string)
+	if !ok {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "job_id required", nil)
+	}
+
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Job not found", err.Error())
+	}
+
+	// Use the new CleanupFailedJobs method to purge from Nomad
+	if err := s.nomadClient.CleanupFailedJobs(job); err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInternalError, "Failed to purge job from Nomad", err.Error())
+	}
+
+	result := ToolCallResult{
+		Content: NewMCPTextContent(fmt.Sprintf("Job %s purged successfully from Nomad", jobID)),
 	}
 	return NewMCPResponse(id, result)
 }
