@@ -128,7 +128,6 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							{
 								DestPath:   stringPtr("/secrets/git-creds"),
 								ChangeMode: stringPtr("restart"),
-								VaultGrace: durationPtr("5s"),
 								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export GIT_USERNAME="{{ .Data.data.username }}"
@@ -141,7 +140,6 @@ export GIT_SSH_KEY="{{ .Data.data.ssh_key }}"
 							{
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
-								VaultGrace: durationPtr("5s"),
 								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"
@@ -280,7 +278,6 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							{
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
-								VaultGrace: durationPtr("5s"),
 								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"
@@ -393,7 +390,6 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							{
 								DestPath:   stringPtr("/secrets/registry-creds"),
 								ChangeMode: stringPtr("restart"),
-								VaultGrace: durationPtr("5s"),
 								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
 {{- with secret "%s" -}}
 export REGISTRY_USERNAME="{{ .Data.data.username }}"

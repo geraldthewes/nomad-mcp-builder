@@ -106,7 +106,13 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "failed":
 			job.Status = types.StatusFailed
 			job.FailedPhase = "build"
-			job.Error = "Build phase failed"
+			// Get detailed error information
+			errorMsg, err := nc.getJobErrorDetails(job.BuildJobID)
+			if err != nil {
+				job.Error = "Build phase failed - unable to get error details"
+			} else {
+				job.Error = fmt.Sprintf("Build phase failed: %s", errorMsg)
+			}
 			now := time.Now()
 			job.FinishedAt = &now
 		}
@@ -137,7 +143,13 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "failed":
 			job.Status = types.StatusFailed
 			job.FailedPhase = "test"
-			job.Error = "Test phase failed"
+			// Get detailed error information
+			errorMsg, err := nc.getJobErrorDetails(job.TestJobID)
+			if err != nil {
+				job.Error = "Test phase failed - unable to get error details"
+			} else {
+				job.Error = fmt.Sprintf("Test phase failed: %s", errorMsg)
+			}
 			now := time.Now()
 			job.FinishedAt = &now
 		}
@@ -160,7 +172,13 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "failed":
 			job.Status = types.StatusFailed
 			job.FailedPhase = "publish"
-			job.Error = "Publish phase failed"
+			// Get detailed error information
+			errorMsg, err := nc.getJobErrorDetails(job.PublishJobID)
+			if err != nil {
+				job.Error = "Publish phase failed - unable to get error details"
+			} else {
+				job.Error = fmt.Sprintf("Publish phase failed: %s", errorMsg)
+			}
 			now := time.Now()
 			job.FinishedAt = &now
 		}
@@ -258,6 +276,53 @@ func (nc *Client) CleanupJob(job *types.Job) error {
 	return nil
 }
 
+// CleanupFailedJobs removes dead/failed jobs from Nomad after capturing their details
+func (nc *Client) CleanupFailedJobs(job *types.Job) error {
+	var errors []string
+	
+	// Clean up build job if it's dead/failed
+	if job.BuildJobID != "" {
+		if status, err := nc.getJobStatus(job.BuildJobID); err == nil && status == "failed" {
+			// Purge (force remove) the dead job from Nomad
+			if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, true, &nomadapi.WriteOptions{
+				// Force purge to remove from Nomad completely
+			}); err != nil {
+				errors = append(errors, fmt.Sprintf("build job cleanup: %v", err))
+			} else {
+				nc.logger.WithField("job_id", job.BuildJobID).Info("Cleaned up failed build job from Nomad")
+			}
+		}
+	}
+	
+	// Clean up test job if it's dead/failed
+	if job.TestJobID != "" {
+		if status, err := nc.getJobStatus(job.TestJobID); err == nil && status == "failed" {
+			if _, _, err := nc.client.Jobs().Deregister(job.TestJobID, true, nil); err != nil {
+				errors = append(errors, fmt.Sprintf("test job cleanup: %v", err))
+			} else {
+				nc.logger.WithField("job_id", job.TestJobID).Info("Cleaned up failed test job from Nomad")
+			}
+		}
+	}
+	
+	// Clean up publish job if it's dead/failed  
+	if job.PublishJobID != "" {
+		if status, err := nc.getJobStatus(job.PublishJobID); err == nil && status == "failed" {
+			if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, true, nil); err != nil {
+				errors = append(errors, fmt.Sprintf("publish job cleanup: %v", err))
+			} else {
+				nc.logger.WithField("job_id", job.PublishJobID).Info("Cleaned up failed publish job from Nomad")
+			}
+		}
+	}
+	
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to cleanup some jobs: %s", strings.Join(errors, ", "))
+	}
+	
+	return nil
+}
+
 // Health checks the health of the Nomad connection
 func (nc *Client) Health() error {
 	_, err := nc.client.Status().Leader()
@@ -275,7 +340,60 @@ func (nc *Client) getJobStatus(nomadJobID string) (string, error) {
 		return "", err
 	}
 	
-	// Map Nomad status to our simplified status
+	// Check allocations for more detailed status
+	allocs, _, err := nc.client.Jobs().Allocations(nomadJobID, false, nil)
+	if err != nil {
+		// If we can't get allocations but job exists, something is wrong
+		nc.logger.WithError(err).WithField("job_id", nomadJobID).Warn("Failed to get job allocations")
+	}
+	
+	// Handle case where job is dead with no allocations (scheduling failure)
+	if *job.Status == "dead" && (allocs == nil || len(allocs) == 0) {
+		return "failed", nil
+	}
+	
+	if err == nil && len(allocs) > 0 {
+		// Check if any allocation failed
+		for _, alloc := range allocs {
+			if alloc.ClientStatus == "failed" {
+				return "failed", nil
+			}
+			// Check task states for more granular failure detection
+			if alloc.TaskStates != nil {
+				for _, taskState := range alloc.TaskStates {
+					if taskState.State == "dead" && taskState.Failed {
+						return "failed", nil
+					}
+				}
+			}
+		}
+		
+		// If we have allocations, check their status
+		hasRunning := false
+		allComplete := true
+		for _, alloc := range allocs {
+			switch alloc.ClientStatus {
+			case "running":
+				hasRunning = true
+				allComplete = false
+			case "pending":
+				allComplete = false
+			case "complete":
+				// Keep checking others
+			default:
+				allComplete = false
+			}
+		}
+		
+		if hasRunning {
+			return "running", nil
+		}
+		if allComplete {
+			return "complete", nil
+		}
+	}
+	
+	// Fall back to basic job status
 	switch *job.Status {
 	case "pending":
 		return "pending", nil
@@ -321,6 +439,57 @@ func (nc *Client) getJobLogs(nomadJobID string) ([]string, error) {
 	}
 	
 	return logs, nil
+}
+
+func (nc *Client) getJobErrorDetails(nomadJobID string) (string, error) {
+	// Check for scheduling failures
+	allocs, _, err := nc.client.Jobs().Allocations(nomadJobID, false, nil)
+	if err != nil {
+		return "Failed to get job allocations", nil
+	}
+	
+	// If no allocations, job failed to schedule
+	if len(allocs) == 0 {
+		// Get job evaluations to understand why it failed to schedule
+		evals, _, err := nc.client.Jobs().Evaluations(nomadJobID, nil)
+		if err == nil && len(evals) > 0 {
+			for _, eval := range evals {
+				if eval.Status == "blocked" || eval.Status == "failed" {
+					return fmt.Sprintf("Job failed to schedule: %s", eval.StatusDescription), nil
+				}
+			}
+		}
+		return "Job failed to schedule - no allocations placed", nil
+	}
+	
+	// Check allocation failures
+	var errorMessages []string
+	for _, alloc := range allocs {
+		if alloc.ClientStatus == "failed" {
+			// Get task states for detailed error info
+			if alloc.TaskStates != nil {
+				for taskName, taskState := range alloc.TaskStates {
+					if taskState.Failed {
+						// Get the most recent failed event
+						if len(taskState.Events) > 0 {
+							lastEvent := taskState.Events[len(taskState.Events)-1]
+							errorMessages = append(errorMessages, 
+								fmt.Sprintf("Task '%s': %s - %s", taskName, lastEvent.Type, lastEvent.DisplayMessage))
+						} else {
+							errorMessages = append(errorMessages, 
+								fmt.Sprintf("Task '%s' failed", taskName))
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	if len(errorMessages) > 0 {
+		return fmt.Sprintf("%s", errorMessages[0]), nil // Return first error for brevity
+	}
+	
+	return "Unknown failure", nil
 }
 
 func (nc *Client) startTestPhase(job *types.Job) error {
