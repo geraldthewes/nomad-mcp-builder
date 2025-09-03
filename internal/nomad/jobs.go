@@ -107,7 +107,6 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								},
 							},
 						},
-						User: "build:build",
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
 							"STORAGE_DRIVER":    "overlay",
@@ -257,7 +256,6 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								},
 							},
 						},
-						User: "build:build",
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
 							"STORAGE_DRIVER":    "overlay",
@@ -369,7 +367,6 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								},
 							},
 						},
-						User: "build:build",
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
 							"STORAGE_DRIVER":    "overlay",
