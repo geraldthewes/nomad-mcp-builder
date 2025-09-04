@@ -68,6 +68,7 @@ type BuildConfig struct {
 	DefaultResourceLimits ResourceLimits    `json:"default_resource_limits"`
 	BuildTimeout          time.Duration     `json:"build_timeout"`
 	TestTimeout           time.Duration     `json:"test_timeout"`
+	KillTimeout           time.Duration     `json:"kill_timeout"`
 	RegistryConfig        RegistryConfig    `json:"registry_config"`
 	BuildCachePath        string            `json:"build_cache_path"`
 }
@@ -133,6 +134,7 @@ func Load() (*Config, error) {
 			},
 			BuildTimeout: getEnvDuration("BUILD_TIMEOUT", 30*time.Minute),
 			TestTimeout:  getEnvDuration("TEST_TIMEOUT", 15*time.Minute),
+			KillTimeout:  getEnvDuration("KILL_TIMEOUT", 30*time.Second),
 			RegistryConfig: RegistryConfig{
 				URL:        getEnv("REGISTRY_URL", ""),
 				TempPrefix: getEnv("REGISTRY_TEMP_PREFIX", "temp"),
@@ -187,6 +189,13 @@ func loadFromConsul(config *Config) error {
 	if pair, _, err := kv.Get(keyPrefix+"test_timeout", nil); err == nil && pair != nil {
 		if timeout, err := time.ParseDuration(string(pair.Value)); err == nil {
 			config.Build.TestTimeout = timeout
+		}
+	}
+	
+	// Load kill timeout from Consul
+	if pair, _, err := kv.Get(keyPrefix+"kill_timeout", nil); err == nil && pair != nil {
+		if timeout, err := time.ParseDuration(string(pair.Value)); err == nil {
+			config.Build.KillTimeout = timeout
 		}
 	}
 	

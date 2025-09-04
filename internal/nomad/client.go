@@ -76,7 +76,17 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	// Log the job specification for debugging
 	nc.logJobSpec(buildJobSpec, "build")
 	
-	evalID, _, err := nc.client.Jobs().Register(buildJobSpec, nil)
+	// Use proper WriteOptions and RegisterOpts to match CLI behavior
+	registerOpts := &nomadapi.RegisterOptions{
+		PolicyOverride: false,
+		PreserveCounts: false,
+	}
+	writeOpts := &nomadapi.WriteOptions{
+		Region:    nc.config.Nomad.Region,
+		Namespace: nc.config.Nomad.Namespace,
+	}
+	
+	evalID, _, err := nc.client.Jobs().RegisterOpts(buildJobSpec, registerOpts, writeOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to submit build job to Nomad: %w", err)
 	}
@@ -519,7 +529,17 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 	// Log the job specification for debugging
 	nc.logJobSpec(testJobSpec, "test")
 	
-	evalID, _, err := nc.client.Jobs().Register(testJobSpec, nil)
+	// Use proper WriteOptions and RegisterOpts to match CLI behavior
+	registerOpts := &nomadapi.RegisterOptions{
+		PolicyOverride: false,
+		PreserveCounts: false,
+	}
+	writeOpts := &nomadapi.WriteOptions{
+		Region:    nc.config.Nomad.Region,
+		Namespace: nc.config.Nomad.Namespace,
+	}
+	
+	evalID, _, err := nc.client.Jobs().RegisterOpts(testJobSpec, registerOpts, writeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to submit test job to Nomad: %w", err)
 	}
@@ -544,7 +564,17 @@ func (nc *Client) startPublishPhase(job *types.Job) error {
 	// Log the job specification for debugging
 	nc.logJobSpec(publishJobSpec, "publish")
 	
-	evalID, _, err := nc.client.Jobs().Register(publishJobSpec, nil)
+	// Use proper WriteOptions and RegisterOpts to match CLI behavior
+	registerOpts := &nomadapi.RegisterOptions{
+		PolicyOverride: false,
+		PreserveCounts: false,
+	}
+	writeOpts := &nomadapi.WriteOptions{
+		Region:    nc.config.Nomad.Region,
+		Namespace: nc.config.Nomad.Namespace,
+	}
+	
+	evalID, _, err := nc.client.Jobs().RegisterOpts(publishJobSpec, registerOpts, writeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to submit publish job to Nomad: %w", err)
 	}
@@ -567,7 +597,17 @@ func (nc *Client) cleanupTempImages(job *types.Job) error {
 	// Log the job specification for debugging
 	nc.logJobSpec(cleanupJobSpec, "cleanup")
 	
-	evalID, _, err := nc.client.Jobs().Register(cleanupJobSpec, nil)
+	// Use proper WriteOptions and RegisterOpts to match CLI behavior
+	registerOpts := &nomadapi.RegisterOptions{
+		PolicyOverride: false,
+		PreserveCounts: false,
+	}
+	writeOpts := &nomadapi.WriteOptions{
+		Region:    nc.config.Nomad.Region,
+		Namespace: nc.config.Nomad.Namespace,
+	}
+	
+	evalID, _, err := nc.client.Jobs().RegisterOpts(cleanupJobSpec, registerOpts, writeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to submit cleanup job to Nomad: %w", err)
 	}

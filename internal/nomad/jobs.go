@@ -14,12 +14,6 @@ import (
 func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	jobID := fmt.Sprintf("build-%s", job.ID)
 	
-	// Build timeout
-	timeout := int64(nc.config.Build.BuildTimeout.Seconds())
-	if job.Config.BuildTimeout != nil {
-		timeout = int64(job.Config.BuildTimeout.Seconds())
-	}
-	
 	// Resource limits
 	cpu := 1000 // Default 1000 MHz
 	memory := 2048 // Default 2048 MB
@@ -45,20 +39,29 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	
 	// Build the task commands
 	buildCommands := []string{
-		"#!/bin/bash",
-		"set -euo pipefail",
+		"#!/bin/sh",
+		"set -eu",  // Alpine sh doesn't support pipefail
+		"",
+		"# Start Docker daemon in background",
+		"dockerd-entrypoint.sh &",
+		"sleep 10",  // Give more time for daemon to start
+		"",
+		"# Install git if not available",
+		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
+		"    apk add --no-cache git",
+		"fi",
 		"",
 		"# Clone repository",
 		fmt.Sprintf("git clone %s /tmp/repo", job.Config.RepoURL),
 		"cd /tmp/repo",
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
-		"# Build image with Buildah",
-		fmt.Sprintf("buildah bud --isolation=chroot --file %s --tag %s .", 
+		"# Build image with Docker",
+		fmt.Sprintf("docker build -f %s -t %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
 		"# Push temporary image to registry",
-		fmt.Sprintf("buildah push %s docker://%s", tempImageName, tempImageName),
+		fmt.Sprintf("docker push %s", tempImageName),
 		"",
 		"echo 'Build completed successfully'",
 	}
@@ -87,23 +90,43 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 						Name:   "main",
 						Driver: "docker",
 						Config: map[string]interface{}{
-							"image": "quay.io/buildah/stable:latest",
-							"command": "/bin/bash",
+							"image": "docker:24-dind",  // Use Docker-in-Docker instead of Buildah
+							"command": "/bin/sh",       // Alpine uses /bin/sh not /bin/bash
 							"args": []string{"-c", strings.Join(buildCommands, "\n")},
-							"privileged": false,
+							"privileged": true,  // Enable privileged mode for cgroup access
+							// Add capabilities required for Buildah user namespaces
+							"cap_add": []string{
+								"SYS_ADMIN",     // Required for mount operations
+								"SETUID",        // Required for user namespace operations
+								"SETGID",        // Required for user namespace operations
+								"SYS_CHROOT",    // Required for chroot operations
+							},
+							// Enable user namespace mapping
+							"userns_mode": "host",
+							// Add security options for user namespace
+							"security_opt": []string{
+								"seccomp=unconfined",
+								"apparmor=unconfined",
+							},
+							// Mount cgroup filesystem for container management
+							"volumes": []string{
+								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
+								"/tmp:/tmp:rw",  // Ensure tmp is writable
+							},
 							// Temporarily removed mount to test scheduling
 						},
 						Env: map[string]string{
-							"BUILDAH_ISOLATION": "chroot",
-							"STORAGE_DRIVER":    "overlay",
-							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
+							"DOCKER_TLS_CERTDIR": "",       // Disable TLS for simplicity
+							"DOCKER_HOST":        "unix:///var/run/docker.sock", // Docker socket
+							"DOCKER_DRIVER":      "overlay2", // Use overlay2 storage driver
+							// Docker-in-Docker configuration
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
 							MemoryMB: intPtr(memory),
 							DiskMB:   intPtr(disk),
 						},
-						KillTimeout: durationPtr("30s"),
+						KillTimeout: &nc.config.Build.KillTimeout,
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
@@ -117,14 +140,11 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 				},
 			},
 		},
-		// Set job timeout
-		Stop:        boolPtr(true),
+		// Allow job to run (don't auto-stop)
+		Stop:        boolPtr(false),
 	}
 	
-	// Add kill timeout at job level
-	if timeout > 0 {
-		jobSpec.TaskGroups[0].Tasks[0].KillTimeout = durationPtr(fmt.Sprintf("%ds", timeout))
-	}
+	// KillTimeout is now set per task using configurable value
 	
 	return jobSpec, nil
 }
@@ -132,12 +152,6 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 // createTestJobSpec creates a Nomad job specification for the test phase
 func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	jobID := fmt.Sprintf("test-%s", job.ID)
-	
-	// Test timeout
-	timeout := int64(nc.config.Build.TestTimeout.Seconds())
-	if job.Config.TestTimeout != nil {
-		timeout = int64(job.Config.TestTimeout.Seconds())
-	}
 	
 	// Resource limits (similar to build phase)
 	cpu := 1000
@@ -213,19 +227,42 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"image":   "quay.io/buildah/stable:latest",
 							"command": "/bin/bash",
 							"args":    []string{"-c", strings.Join(testCommands, "\n")},
+							// Add capabilities required for Buildah user namespaces
+							"cap_add": []string{
+								"SYS_ADMIN",     // Required for mount operations
+								"SETUID",        // Required for user namespace operations
+								"SETGID",        // Required for user namespace operations
+								"SYS_CHROOT",    // Required for chroot operations
+							},
+							// Enable user namespace mapping
+							"userns_mode": "host",
+							// Add security options for user namespace
+							"security_opt": []string{
+								"seccomp=unconfined",
+								"apparmor=unconfined",
+							},
+							// Mount cgroup filesystem for container management
+							"volumes": []string{
+								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
+								"/tmp:/tmp:rw",  // Ensure tmp is writable
+							},
 							// Removed /dev/fuse device to avoid version constraints
 						},
 						Env: map[string]string{
-							"BUILDAH_ISOLATION": "chroot",
-							"STORAGE_DRIVER":    "overlay",
-							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
+							"BUILDAH_ISOLATION": "chroot",  // Use chroot isolation to avoid cgroup issues
+							"STORAGE_DRIVER":    "vfs",     // Use VFS storage driver for better compatibility
+							"BUILDAH_FORMAT":    "oci",     // Ensure OCI format
+							"BUILDAH_LAYERS":    "false",   // Disable layer caching to simplify
+							"_BUILDAH_STARTED_IN_USERNS": "1", // Tell buildah we're in a user namespace
+							"BUILDAH_ROOTLESS":  "1",       // Enable rootless mode
+							// Remove cgroup manager to avoid delegation issues
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
 							MemoryMB: intPtr(memory),
 							DiskMB:   intPtr(disk),
 						},
-						KillTimeout: durationPtr(fmt.Sprintf("%ds", timeout)),
+						KillTimeout: &nc.config.Build.KillTimeout,
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
@@ -309,19 +346,42 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"image":   "quay.io/buildah/stable:latest",
 							"command": "/bin/bash",
 							"args":    []string{"-c", strings.Join(publishCommands, "\n")},
+							// Add capabilities required for Buildah user namespaces
+							"cap_add": []string{
+								"SYS_ADMIN",     // Required for mount operations
+								"SETUID",        // Required for user namespace operations
+								"SETGID",        // Required for user namespace operations
+								"SYS_CHROOT",    // Required for chroot operations
+							},
+							// Enable user namespace mapping
+							"userns_mode": "host",
+							// Add security options for user namespace
+							"security_opt": []string{
+								"seccomp=unconfined",
+								"apparmor=unconfined",
+							},
+							// Mount cgroup filesystem for container management
+							"volumes": []string{
+								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
+								"/tmp:/tmp:rw",  // Ensure tmp is writable
+							},
 							// Removed /dev/fuse device to avoid version constraints
 						},
 						Env: map[string]string{
-							"BUILDAH_ISOLATION": "chroot",
-							"STORAGE_DRIVER":    "overlay",
-							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
+							"BUILDAH_ISOLATION": "chroot",  // Use chroot isolation to avoid cgroup issues
+							"STORAGE_DRIVER":    "vfs",     // Use VFS storage driver for better compatibility
+							"BUILDAH_FORMAT":    "oci",     // Ensure OCI format
+							"BUILDAH_LAYERS":    "false",   // Disable layer caching to simplify
+							"_BUILDAH_STARTED_IN_USERNS": "1", // Tell buildah we're in a user namespace
+							"BUILDAH_ROOTLESS":  "1",       // Enable rootless mode
+							// Remove cgroup manager to avoid delegation issues
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
 							MemoryMB: intPtr(memory),
 							DiskMB:   intPtr(disk),
 						},
-						KillTimeout: durationPtr("300s"), // 5 minutes for registry operations
+						KillTimeout: &nc.config.Build.KillTimeout, // Configurable timeout
 						Vault: &nomadapi.Vault{
 							Policies:   []string{"nomad-build-service"},
 							ChangeMode: stringPtr("restart"),
@@ -394,7 +454,7 @@ func (nc *Client) createCleanupJobSpec(job *types.Job) *nomadapi.Job {
 							MemoryMB: intPtr(256),
 							DiskMB:   intPtr(512),
 						},
-						KillTimeout: durationPtr("60s"),
+						KillTimeout: &nc.config.Build.KillTimeout,
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
