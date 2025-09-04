@@ -91,17 +91,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"command": "/bin/bash",
 							"args": []string{"-c", strings.Join(buildCommands, "\n")},
 							"privileged": false,
-							// Removed /dev/fuse device to avoid version constraints
-							"mount": []map[string]interface{}{
-								{
-									"type":   "bind",
-									"source": nc.config.Build.BuildCachePath,
-									"target": "/var/lib/containers",
-									"bind_options": map[string]interface{}{
-										"propagation": "rprivate",
-									},
-								},
-							},
+							// Temporarily removed mount to test scheduling
 						},
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
