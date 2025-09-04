@@ -76,8 +76,9 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		},
 		TaskGroups: []*nomadapi.TaskGroup{
 			{
-				Name:  stringPtr("build"),
-				Count: intPtr(1),
+				Name:        stringPtr("build"),
+				Count:       intPtr(1),
+				Constraints: []*nomadapi.Constraint{}, // Override automatic constraints
 				RestartPolicy: &nomadapi.RestartPolicy{
 					Attempts: intPtr(0), // No restart for build jobs
 				},
@@ -90,12 +91,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"command": "/bin/bash",
 							"args": []string{"-c", strings.Join(buildCommands, "\n")},
 							"privileged": false,
-							"devices": []map[string]interface{}{
-								{
-									"host_path":      "/dev/fuse",
-									"container_path": "/dev/fuse",
-								},
-							},
+							// Removed /dev/fuse device to avoid version constraints
 							"mount": []map[string]interface{}{
 								{
 									"type":   "bind",
@@ -123,31 +119,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							ChangeMode: stringPtr("restart"),
 							Role:       "nomad-workloads", // Use the correct JWT role
 						},
-						Templates: []*nomadapi.Template{
-							// Git credentials template
-							{
-								DestPath:   stringPtr("/secrets/git-creds"),
-								ChangeMode: stringPtr("restart"),
-								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
-{{- with secret "%s" -}}
-export GIT_USERNAME="{{ .Data.data.username }}"
-export GIT_PASSWORD="{{ .Data.data.password }}"
-export GIT_SSH_KEY="{{ .Data.data.ssh_key }}"
-{{- end -}}
-`, job.Config.GitCredentialsPath)),
-							},
-							// Registry credentials template
-							{
-								DestPath:   stringPtr("/secrets/registry-creds"),
-								ChangeMode: stringPtr("restart"),
-								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
-{{- with secret "%s" -}}
-export REGISTRY_USERNAME="{{ .Data.data.username }}"
-export REGISTRY_PASSWORD="{{ .Data.data.password }}"
-{{- end -}}
-`, job.Config.RegistryCredentialsPath)),
-							},
-						},
+						Templates: buildTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -232,8 +204,9 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		},
 		TaskGroups: []*nomadapi.TaskGroup{
 			{
-				Name:  stringPtr("test"),
-				Count: intPtr(1),
+				Name:        stringPtr("test"),
+				Count:       intPtr(1),
+				Constraints: []*nomadapi.Constraint{}, // Override automatic constraints
 				RestartPolicy: &nomadapi.RestartPolicy{
 					Attempts: intPtr(0),
 				},
@@ -250,12 +223,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"image":   "quay.io/buildah/stable:latest",
 							"command": "/bin/bash",
 							"args":    []string{"-c", strings.Join(testCommands, "\n")},
-							"devices": []map[string]interface{}{
-								{
-									"host_path":      "/dev/fuse",
-									"container_path": "/dev/fuse",
-								},
-							},
+							// Removed /dev/fuse device to avoid version constraints
 						},
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
@@ -273,19 +241,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							ChangeMode: stringPtr("restart"),
 							Role:       "nomad-workloads", // Use the correct JWT role
 						},
-						Templates: []*nomadapi.Template{
-							// Registry credentials for pulling temp image
-							{
-								DestPath:   stringPtr("/secrets/registry-creds"),
-								ChangeMode: stringPtr("restart"),
-								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
-{{- with secret "%s" -}}
-export REGISTRY_USERNAME="{{ .Data.data.username }}"
-export REGISTRY_PASSWORD="{{ .Data.data.password }}"
-{{- end -}}
-`, job.Config.RegistryCredentialsPath)),
-							},
-						},
+						Templates: testTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -349,8 +305,9 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		},
 		TaskGroups: []*nomadapi.TaskGroup{
 			{
-				Name:  stringPtr("publish"),
-				Count: intPtr(1),
+				Name:        stringPtr("publish"),
+				Count:       intPtr(1),
+				Constraints: []*nomadapi.Constraint{}, // Override automatic constraints
 				RestartPolicy: &nomadapi.RestartPolicy{
 					Attempts: intPtr(1), // Allow one retry for publish
 				},
@@ -362,12 +319,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"image":   "quay.io/buildah/stable:latest",
 							"command": "/bin/bash",
 							"args":    []string{"-c", strings.Join(publishCommands, "\n")},
-							"devices": []map[string]interface{}{
-								{
-									"host_path":      "/dev/fuse",
-									"container_path": "/dev/fuse",
-								},
-							},
+							// Removed /dev/fuse device to avoid version constraints
 						},
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
@@ -385,19 +337,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							ChangeMode: stringPtr("restart"),
 							Role:       "nomad-workloads", // Use the correct JWT role
 						},
-						Templates: []*nomadapi.Template{
-							// Registry credentials
-							{
-								DestPath:   stringPtr("/secrets/registry-creds"),
-								ChangeMode: stringPtr("restart"),
-								EmbeddedTmpl: stringPtr(fmt.Sprintf(`
-{{- with secret "%s" -}}
-export REGISTRY_USERNAME="{{ .Data.data.username }}"
-export REGISTRY_PASSWORD="{{ .Data.data.password }}"
-{{- end -}}
-`, job.Config.RegistryCredentialsPath)),
-							},
-						},
+						Templates: publishTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -493,4 +433,83 @@ func boolPtr(b bool) *bool {
 func durationPtr(d string) *time.Duration {
 	duration, _ := time.ParseDuration(d)
 	return &duration
+}
+
+// buildTemplates creates Vault templates for a job, conditionally including registry credentials
+func buildTemplates(job *types.Job) []*nomadapi.Template {
+	templates := []*nomadapi.Template{
+		// Git credentials template (always included)
+		{
+			DestPath:   stringPtr("/secrets/git-creds"),
+			ChangeMode: stringPtr("restart"),
+			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
+{{- with secret "%s" -}}
+export GIT_USERNAME="{{ .Data.data.username }}"
+export GIT_PASSWORD="{{ .Data.data.password }}"
+export GIT_SSH_KEY="{{ .Data.data.ssh_key }}"
+{{- end -}}
+`, job.Config.GitCredentialsPath)),
+		},
+	}
+	
+	// Only add registry credentials template if path is provided and not empty
+	if job.Config.RegistryCredentialsPath != "" {
+		registryTemplate := &nomadapi.Template{
+			DestPath:   stringPtr("/secrets/registry-creds"),
+			ChangeMode: stringPtr("restart"),
+			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
+{{- with secret "%s" -}}
+export REGISTRY_USERNAME="{{ .Data.data.username }}"
+export REGISTRY_PASSWORD="{{ .Data.data.password }}"
+{{- end -}}
+`, job.Config.RegistryCredentialsPath)),
+		}
+		templates = append(templates, registryTemplate)
+	}
+	
+	return templates
+}
+
+// testTemplates creates Vault templates for the test phase (only registry credentials if needed)
+func testTemplates(job *types.Job) []*nomadapi.Template {
+	var templates []*nomadapi.Template
+	
+	// Only add registry credentials template if path is provided and not empty
+	if job.Config.RegistryCredentialsPath != "" {
+		registryTemplate := &nomadapi.Template{
+			DestPath:   stringPtr("/secrets/registry-creds"),
+			ChangeMode: stringPtr("restart"),
+			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
+{{- with secret "%s" -}}
+export REGISTRY_USERNAME="{{ .Data.data.username }}"
+export REGISTRY_PASSWORD="{{ .Data.data.password }}"
+{{- end -}}
+`, job.Config.RegistryCredentialsPath)),
+		}
+		templates = append(templates, registryTemplate)
+	}
+	
+	return templates
+}
+
+// publishTemplates creates Vault templates for the publish phase (only registry credentials if needed)
+func publishTemplates(job *types.Job) []*nomadapi.Template {
+	var templates []*nomadapi.Template
+	
+	// Only add registry credentials template if path is provided and not empty
+	if job.Config.RegistryCredentialsPath != "" {
+		registryTemplate := &nomadapi.Template{
+			DestPath:   stringPtr("/secrets/registry-creds"),
+			ChangeMode: stringPtr("restart"),
+			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
+{{- with secret "%s" -}}
+export REGISTRY_USERNAME="{{ .Data.data.username }}"
+export REGISTRY_PASSWORD="{{ .Data.data.password }}"
+{{- end -}}
+`, job.Config.RegistryCredentialsPath)),
+		}
+		templates = append(templates, registryTemplate)
+	}
+	
+	return templates
 }
