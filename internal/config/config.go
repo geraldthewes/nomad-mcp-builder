@@ -30,6 +30,9 @@ type Config struct {
 	
 	// Monitoring configuration
 	Monitoring MonitoringConfig `json:"monitoring"`
+	
+	// Logging configuration
+	Logging LoggingConfig `json:"logging"`
 }
 
 type ServerConfig struct {
@@ -88,6 +91,12 @@ type MonitoringConfig struct {
 	HealthPort  int    `json:"health_port"`
 }
 
+type LoggingConfig struct {
+	Level          string `json:"level"`
+	LogJobSpecs    bool   `json:"log_job_specs"`
+	LogHCLFormat   bool   `json:"log_hcl_format"`
+}
+
 // Load loads configuration from environment variables and Consul
 func Load() (*Config, error) {
 	config := &Config{
@@ -136,6 +145,11 @@ func Load() (*Config, error) {
 			Enabled:     getEnvBool("MONITORING_ENABLED", true),
 			MetricsPort: getEnvInt("METRICS_PORT", 9090),
 			HealthPort:  getEnvInt("HEALTH_PORT", 8081),
+		},
+		Logging: LoggingConfig{
+			Level:        getEnv("LOG_LEVEL", "info"),
+			LogJobSpecs:  getEnvBool("LOG_JOB_SPECS", false),
+			LogHCLFormat: getEnvBool("LOG_HCL_FORMAT", false),
 		},
 	}
 	

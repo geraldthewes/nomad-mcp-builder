@@ -1,6 +1,8 @@
 package nomad
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -33,10 +35,20 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create Nomad client: %w", err)
 	}
 	
+	logger := logrus.New()
+	
+	// Set log level from configuration
+	level, err := logrus.ParseLevel(cfg.Logging.Level)
+	if err != nil {
+		logger.WithField("log_level", cfg.Logging.Level).Warn("Invalid log level in nomad client, using info")
+		level = logrus.InfoLevel
+	}
+	logger.SetLevel(level)
+	
 	return &Client{
 		client: client,
 		config: cfg,
-		logger: logrus.New(),
+		logger: logger,
 	}, nil
 }
 
@@ -60,6 +72,9 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create build job spec: %w", err)
 	}
+	
+	// Log the job specification for debugging
+	nc.logJobSpec(buildJobSpec, "build")
 	
 	evalID, _, err := nc.client.Jobs().Register(buildJobSpec, nil)
 	if err != nil {
@@ -501,6 +516,9 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 		return fmt.Errorf("failed to create test job spec: %w", err)
 	}
 	
+	// Log the job specification for debugging
+	nc.logJobSpec(testJobSpec, "test")
+	
 	evalID, _, err := nc.client.Jobs().Register(testJobSpec, nil)
 	if err != nil {
 		return fmt.Errorf("failed to submit test job to Nomad: %w", err)
@@ -523,6 +541,9 @@ func (nc *Client) startPublishPhase(job *types.Job) error {
 		return fmt.Errorf("failed to create publish job spec: %w", err)
 	}
 	
+	// Log the job specification for debugging
+	nc.logJobSpec(publishJobSpec, "publish")
+	
 	evalID, _, err := nc.client.Jobs().Register(publishJobSpec, nil)
 	if err != nil {
 		return fmt.Errorf("failed to submit publish job to Nomad: %w", err)
@@ -543,6 +564,9 @@ func (nc *Client) cleanupTempImages(job *types.Job) error {
 	// Create a cleanup job to remove temporary images from registry
 	cleanupJobSpec := nc.createCleanupJobSpec(job)
 	
+	// Log the job specification for debugging
+	nc.logJobSpec(cleanupJobSpec, "cleanup")
+	
 	evalID, _, err := nc.client.Jobs().Register(cleanupJobSpec, nil)
 	if err != nil {
 		return fmt.Errorf("failed to submit cleanup job to Nomad: %w", err)
@@ -555,4 +579,234 @@ func (nc *Client) cleanupTempImages(job *types.Job) error {
 	}).Info("Cleanup job submitted to Nomad")
 	
 	return nil
+}
+
+// logJobSpec logs the job specification based on configuration settings
+func (nc *Client) logJobSpec(jobSpec *nomadapi.Job, phase string) {
+	if !nc.config.Logging.LogJobSpecs {
+		return
+	}
+
+	logEntry := nc.logger.WithFields(logrus.Fields{
+		"nomad_job_id": *jobSpec.ID,
+		"phase":        phase,
+	})
+
+	if nc.config.Logging.LogHCLFormat {
+		// Convert job spec to HCL-style format for easier debugging
+		hcl, err := nc.JobSpecToHCL(jobSpec)
+		if err != nil {
+			logEntry.WithError(err).Warn("Failed to convert job spec to HCL format")
+		} else {
+			// Encode as base64 to avoid escaping hell
+			encoded := base64.StdEncoding.EncodeToString([]byte(hcl))
+			logEntry.WithField("job_spec_hcl_b64", encoded).Debug("Generated Nomad job specification (HCL base64 encoded)")
+			
+			// Also log decode instructions
+			logEntry.Info("To decode HCL: echo 'BASE64_STRING' | base64 -d > job.hcl")
+		}
+	} else {
+		// Log as JSON for programmatic consumption
+		jsonSpec, err := json.MarshalIndent(jobSpec, "", "  ")
+		if err != nil {
+			logEntry.WithError(err).Warn("Failed to marshal job spec to JSON")
+		} else {
+			// Encode JSON as base64 too for consistency
+			encoded := base64.StdEncoding.EncodeToString(jsonSpec)
+			logEntry.WithField("job_spec_json_b64", encoded).Debug("Generated Nomad job specification (JSON base64 encoded)")
+			
+			// Also log decode instructions  
+			logEntry.Info("To decode JSON: echo 'BASE64_STRING' | base64 -d | jq")
+		}
+	}
+}
+
+// JobSpecToHCL converts a job specification to HCL-like format for debugging
+func (nc *Client) JobSpecToHCL(jobSpec *nomadapi.Job) (string, error) {
+	var hcl strings.Builder
+	
+	hcl.WriteString(fmt.Sprintf("job \"%s\" {\n", *jobSpec.ID))
+	hcl.WriteString(fmt.Sprintf("  name      = \"%s\"\n", *jobSpec.Name))
+	hcl.WriteString(fmt.Sprintf("  type      = \"%s\"\n", *jobSpec.Type))
+	hcl.WriteString(fmt.Sprintf("  namespace = \"%s\"\n", *jobSpec.Namespace))
+	hcl.WriteString(fmt.Sprintf("  region    = \"%s\"\n", *jobSpec.Region))
+	
+	if len(jobSpec.Datacenters) > 0 {
+		hcl.WriteString("  datacenters = [")
+		for i, dc := range jobSpec.Datacenters {
+			if i > 0 {
+				hcl.WriteString(", ")
+			}
+			hcl.WriteString(fmt.Sprintf("\"%s\"", dc))
+		}
+		hcl.WriteString("]\n")
+	}
+	
+	// Add meta fields
+	if len(jobSpec.Meta) > 0 {
+		hcl.WriteString("\n  meta {\n")
+		for key, value := range jobSpec.Meta {
+			hcl.WriteString(fmt.Sprintf("    %s = \"%s\"\n", key, value))
+		}
+		hcl.WriteString("  }\n")
+	}
+	
+	// Add task groups
+	for _, tg := range jobSpec.TaskGroups {
+		hcl.WriteString(fmt.Sprintf("\n  group \"%s\" {\n", *tg.Name))
+		hcl.WriteString(fmt.Sprintf("    count = %d\n", *tg.Count))
+		
+		// Add restart policy
+		if tg.RestartPolicy != nil {
+			hcl.WriteString("\n    restart {\n")
+			hcl.WriteString(fmt.Sprintf("      attempts = %d\n", *tg.RestartPolicy.Attempts))
+			hcl.WriteString("    }\n")
+		}
+		
+		// Add network configuration
+		if len(tg.Networks) > 0 {
+			for _, network := range tg.Networks {
+				hcl.WriteString("\n    network {\n")
+				if network.Mode != "" {
+					hcl.WriteString(fmt.Sprintf("      mode = \"%s\"\n", network.Mode))
+				}
+				hcl.WriteString("    }\n")
+			}
+		}
+		
+		// Add ephemeral disk
+		if tg.EphemeralDisk != nil {
+			hcl.WriteString("\n    ephemeral_disk {\n")
+			hcl.WriteString(fmt.Sprintf("      size = %d\n", *tg.EphemeralDisk.SizeMB))
+			hcl.WriteString("    }\n")
+		}
+		
+		// Add tasks
+		for _, task := range tg.Tasks {
+			hcl.WriteString(fmt.Sprintf("\n    task \"%s\" {\n", task.Name))
+			hcl.WriteString(fmt.Sprintf("      driver = \"%s\"\n", task.Driver))
+			
+			// Add task config
+			if len(task.Config) > 0 {
+				hcl.WriteString("\n      config {\n")
+				for key, value := range task.Config {
+					switch v := value.(type) {
+					case string:
+						// Handle multi-line strings properly with heredocs
+						if strings.Contains(v, "\n") {
+							hcl.WriteString(fmt.Sprintf("        %s = <<EOF\n%s\nEOF\n", key, v))
+						} else {
+							// Escape quotes in single-line strings
+							escaped := strings.ReplaceAll(v, "\"", "\\\"")
+							hcl.WriteString(fmt.Sprintf("        %s = \"%s\"\n", key, escaped))
+						}
+					case []string:
+						hcl.WriteString(fmt.Sprintf("        %s = [\n", key))
+						for i, item := range v {
+							// Handle multi-line items in arrays with proper escaping
+							if strings.Contains(item, "\n") {
+								hcl.WriteString("          <<EOF\n")
+								hcl.WriteString(item)
+								hcl.WriteString("\nEOF")
+								if i < len(v)-1 {
+									hcl.WriteString(",")
+								}
+								hcl.WriteString("\n")
+							} else {
+								// Escape quotes for single-line items
+								escaped := strings.ReplaceAll(item, "\"", "\\\"")
+								hcl.WriteString(fmt.Sprintf("          \"%s\"", escaped))
+								if i < len(v)-1 {
+									hcl.WriteString(",")
+								}
+								hcl.WriteString("\n")
+							}
+						}
+						hcl.WriteString("        ]\n")
+					case bool:
+						hcl.WriteString(fmt.Sprintf("        %s = %t\n", key, v))
+					default:
+						// Convert to JSON for complex types
+						jsonVal, _ := json.Marshal(v)
+						hcl.WriteString(fmt.Sprintf("        %s = %s\n", key, string(jsonVal)))
+					}
+				}
+				hcl.WriteString("      }\n")
+			}
+			
+			// Add environment variables
+			if len(task.Env) > 0 {
+				hcl.WriteString("\n      env {\n")
+				for key, value := range task.Env {
+					hcl.WriteString(fmt.Sprintf("        %s = \"%s\"\n", key, value))
+				}
+				hcl.WriteString("      }\n")
+			}
+			
+			// Add resources
+			if task.Resources != nil {
+				hcl.WriteString("\n      resources {\n")
+				if task.Resources.CPU != nil {
+					hcl.WriteString(fmt.Sprintf("        cpu    = %d\n", *task.Resources.CPU))
+				}
+				if task.Resources.MemoryMB != nil {
+					hcl.WriteString(fmt.Sprintf("        memory = %d\n", *task.Resources.MemoryMB))
+				}
+				if task.Resources.DiskMB != nil {
+					hcl.WriteString(fmt.Sprintf("        disk   = %d\n", *task.Resources.DiskMB))
+				}
+				hcl.WriteString("      }\n")
+			}
+			
+			// Add Vault configuration
+			if task.Vault != nil {
+				hcl.WriteString("\n      vault {\n")
+				if len(task.Vault.Policies) > 0 {
+					hcl.WriteString("        policies = [")
+					for i, policy := range task.Vault.Policies {
+						if i > 0 {
+							hcl.WriteString(", ")
+						}
+						hcl.WriteString(fmt.Sprintf("\"%s\"", policy))
+					}
+					hcl.WriteString("]\n")
+				}
+				if task.Vault.ChangeMode != nil {
+					hcl.WriteString(fmt.Sprintf("        change_mode = \"%s\"\n", *task.Vault.ChangeMode))
+				}
+				if task.Vault.Role != "" {
+					hcl.WriteString(fmt.Sprintf("        role = \"%s\"\n", task.Vault.Role))
+				}
+				hcl.WriteString("      }\n")
+			}
+			
+			// Add templates
+			if len(task.Templates) > 0 {
+				for _, template := range task.Templates {
+					hcl.WriteString("\n      template {\n")
+					if template.DestPath != nil {
+						hcl.WriteString(fmt.Sprintf("        destination = \"%s\"\n", *template.DestPath))
+					}
+					if template.ChangeMode != nil {
+						hcl.WriteString(fmt.Sprintf("        change_mode = \"%s\"\n", *template.ChangeMode))
+					}
+					if template.EmbeddedTmpl != nil {
+						// Use heredoc for template data to handle multi-line content
+						hcl.WriteString("        data = <<EOF\n")
+						hcl.WriteString(*template.EmbeddedTmpl)
+						hcl.WriteString("\nEOF\n")
+					}
+					hcl.WriteString("      }\n")
+				}
+			}
+			
+			hcl.WriteString("    }\n")
+		}
+		
+		hcl.WriteString("  }\n")
+	}
+	
+	hcl.WriteString("}\n")
+	
+	return hcl.String(), nil
 }

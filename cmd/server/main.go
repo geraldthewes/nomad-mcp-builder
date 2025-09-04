@@ -27,6 +27,14 @@ func main() {
 		logger.WithError(err).Fatal("Failed to load configuration")
 	}
 	
+	// Set log level from configuration
+	level, err := logrus.ParseLevel(cfg.Logging.Level)
+	if err != nil {
+		logger.WithField("log_level", cfg.Logging.Level).Warn("Invalid log level, using info")
+		level = logrus.InfoLevel
+	}
+	logger.SetLevel(level)
+	
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		logger.WithError(err).Fatal("Invalid configuration")
