@@ -42,9 +42,13 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"#!/bin/sh",
 		"set -eu",  // Alpine sh doesn't support pipefail
 		"",
-		"# Start Docker daemon in background with reduced verbosity",
-		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock > /dev/null 2>&1 &",
-		"sleep 15",  // Give more time for daemon to start
+		"# Clean Docker state to avoid database locks",
+		"rm -rf /var/lib/docker/volumes/metadata.db*",
+		"rm -rf /var/lib/docker/buildkit",
+		"",
+		"# Start Docker daemon in background with cgroup v1 compatibility",
+		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --storage-driver=overlay2 --exec-opt native.cgroupdriver=cgroupfs --bridge=none --iptables=false --debug > /tmp/dockerd.log 2>&1 &",
+		"sleep 30",  // Give more time for daemon to start
 		"",
 		"# Install git if not available",
 		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
@@ -60,14 +64,25 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
 		"# Wait for Docker daemon to be ready",
+		"retries=0",
 		"until docker info >/dev/null 2>&1; do",
 		"    echo 'Waiting for Docker daemon...'",
+		"    retries=$((retries + 1))",
+		"    if [ $retries -gt 30 ]; then",
+		"        echo 'Docker daemon failed to start. Checking logs:'",
+		"        cat /tmp/dockerd.log || echo 'No daemon logs available'",
+		"        exit 1",
+		"    fi",
 		"    sleep 2",
 		"done",
 		"echo 'Docker daemon ready'",
 		"",
-		"# Build image with Docker",
-		fmt.Sprintf("docker build -f %s -t %s .", 
+		"# Explicitly disable BuildKit and use legacy builder",
+		"export DOCKER_BUILDKIT=0",
+		"export BUILDKIT_PROGRESS=plain",
+		"",
+		"# Build image with Docker using legacy builder",
+		fmt.Sprintf("docker build --no-cache --progress=plain -f %s -t %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
 		"# Push temporary image to registry", 
@@ -118,20 +133,22 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 								"seccomp=unconfined",
 								"apparmor=unconfined",
 							},
-							// Mount cgroup filesystem for container management
+							// Mount cgroup filesystem for container management  
 							"volumes": []string{
 								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
+								"/var/lib/docker:/var/lib/docker:rw", // Mount Docker storage
 								"/tmp:/tmp:rw",  // Ensure tmp is writable
 							},
 							// Temporarily removed mount to test scheduling
 						},
 						Env: map[string]string{
-							"DOCKER_TLS_CERTDIR":   "",       // Disable TLS for simplicity
+							"DOCKER_TLS_CERTDIR":   "",         // Disable TLS for simplicity
 							"DOCKER_HOST":          "unix:///var/run/docker.sock", // Docker socket
 							"DOCKER_DRIVER":        "overlay2", // Use overlay2 storage driver
-							"TINI_SUBREAPER":       "1",      // Fix tini zombie reaping
-							"DOCKER_BUILDKIT":      "1",      // Enable BuildKit for better builds
-							// Docker-in-Docker configuration
+							"TINI_SUBREAPER":       "1",        // Fix tini zombie reaping
+							"DOCKER_BUILDKIT":      "0",        // Disable BuildKit to avoid cgroup issues
+							"BUILDKIT_PROGRESS":    "plain",    // Use plain progress output
+							// Docker-in-Docker configuration for cgroup compatibility
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
