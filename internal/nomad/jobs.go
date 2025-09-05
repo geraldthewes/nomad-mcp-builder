@@ -40,17 +40,43 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	// Build the task commands
 	buildCommands := []string{
 		"#!/bin/sh",
-		"set -eu",  // Alpine sh doesn't support pipefail
+		"set -e",  // Removed -u flag that might cause issues with unset vars
 		"",
-		"# Clean Docker state to avoid database locks and speed startup",
-		"rm -rf /var/lib/docker/volumes/metadata.db*",
-		"rm -rf /var/lib/docker/buildkit",
-		"rm -rf /var/lib/docker/containers/*",  // Remove old container state
-		"rm -rf /var/lib/docker/network/files/*",  // Clean network state
+		"echo 'Starting Docker-in-Docker build process...'",
+		"# Clean Docker state carefully to avoid database locks",
+		"rm -rf /var/lib/docker/volumes/metadata.db* || true",
+		"rm -rf /var/lib/docker/buildkit || true", 
+		"# Clean old stopped containers but preserve directory structure",
+		"find /var/lib/docker/containers -name 'config.v2.json' -delete 2>/dev/null || true",
+		"# Clean network state to prevent controller timeouts", 
+		"rm -rf /var/lib/docker/network/files/local-kv.db || true",
 		"",
-		"# Start Docker daemon in background with minimal overhead configuration",
-		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --storage-driver=overlay2 --exec-opt native.cgroupdriver=cgroupfs --bridge=none --iptables=false --ip-forward=false --userland-proxy=false --live-restore=false > /tmp/dockerd.log 2>&1 &",
-		"sleep 15",  // Reduced startup time with optimizations
+		"# Initialize cgroup v2 for Docker-in-Docker (based on 2024 best practices)",
+		"if [ -f /sys/fs/cgroup/cgroup.controllers ]; then",
+		"    echo 'Setting up cgroup v2 for DinD...'",
+		"    # Move processes from root group to init group",
+		"    mkdir -p /sys/fs/cgroup/init",
+		"    xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true",
+		"    # Enable controllers for nested cgroups",
+		"    sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true",
+		"fi",
+		"",
+		"# Create minimal daemon configuration for BuildKit",
+		"mkdir -p /etc/docker",
+		"cat > /etc/docker/daemon.json << 'EOF'",
+		"{",
+		"  \"features\": { \"buildkit\": true },", 
+		"  \"storage-driver\": \"overlay2\",",
+		"  \"exec-opts\": [\"native.cgroupdriver=cgroupfs\"],",
+		"  \"live-restore\": false",
+		"}",
+		"EOF",
+		"",
+		"# Start Docker daemon with standard DinD configuration",
+		"echo 'Starting Docker daemon for DinD...'",
+		"dockerd --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --tls=false --config-file=/etc/docker/daemon.json > /tmp/dockerd.log 2>&1 &",
+		"DOCKERD_PID=$!",
+		"sleep 15",  // Give daemon time to start
 		"",
 		"# Install git if not available",
 		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
@@ -66,25 +92,30 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
 		"# Wait for Docker daemon to be ready",
+		"echo 'Waiting for Docker daemon to become ready...'",
 		"retries=0",
 		"until docker info >/dev/null 2>&1; do",
-		"    echo 'Waiting for Docker daemon...'",
+		"    echo 'Waiting for Docker daemon... (attempt $((retries + 1)))'",
 		"    retries=$((retries + 1))",
-		"    if [ $retries -gt 30 ]; then",
-		"        echo 'Docker daemon failed to start. Checking logs:'",
+		"    if [ $retries -gt 20 ]; then",
+		"        echo 'Docker daemon failed to start after 40 seconds. Checking logs:'",
+		"        echo '=== Docker daemon logs ==='",
 		"        cat /tmp/dockerd.log || echo 'No daemon logs available'",
+		"        echo '=== Process status ==='",
+		"        ps aux | grep dockerd || echo 'No dockerd processes found'",
+		"        echo 'Exiting with failure'",
 		"        exit 1",
 		"    fi",
 		"    sleep 2",
 		"done",
-		"echo 'Docker daemon ready'",
+		"echo 'Docker daemon is ready!'",
 		"",
-		"# Explicitly disable BuildKit and use legacy builder",
-		"export DOCKER_BUILDKIT=0",
+		"# Use BuildKit with proper configuration",
+		"export DOCKER_BUILDKIT=1",
 		"export BUILDKIT_PROGRESS=plain",
 		"",
-		"# Build image with Docker using legacy builder",
-		fmt.Sprintf("docker build --no-cache --progress=plain -f %s -t %s .", 
+		"# Build image with Docker using BuildKit", 
+		fmt.Sprintf("docker build --no-cache -f %s -t %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
 		"# Push temporary image to registry", 
@@ -148,9 +179,9 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"DOCKER_HOST":          "unix:///var/run/docker.sock", // Docker socket
 							"DOCKER_DRIVER":        "overlay2", // Use overlay2 storage driver
 							"TINI_SUBREAPER":       "1",        // Fix tini zombie reaping
-							"DOCKER_BUILDKIT":      "0",        // Disable BuildKit to avoid cgroup issues
+							"DOCKER_BUILDKIT":      "1",        // Enable BuildKit with proper cgroup support
 							"BUILDKIT_PROGRESS":    "plain",    // Use plain progress output
-							// Docker-in-Docker configuration for cgroup compatibility
+							// Docker-in-Docker configuration for cgroup v2 compatibility
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
