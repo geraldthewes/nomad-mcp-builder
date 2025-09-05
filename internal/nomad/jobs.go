@@ -42,25 +42,35 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"#!/bin/sh",
 		"set -eu",  // Alpine sh doesn't support pipefail
 		"",
-		"# Start Docker daemon in background",
-		"dockerd-entrypoint.sh &",
-		"sleep 10",  // Give more time for daemon to start
+		"# Start Docker daemon in background with reduced verbosity",
+		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock > /dev/null 2>&1 &",
+		"sleep 15",  // Give more time for daemon to start
 		"",
 		"# Install git if not available",
 		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
 		"    apk add --no-cache git",
 		"fi",
 		"",
+		"# Clean up any existing repo directory",
+		"rm -rf /tmp/repo",
+		"",
 		"# Clone repository",
 		fmt.Sprintf("git clone %s /tmp/repo", job.Config.RepoURL),
 		"cd /tmp/repo",
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
+		"# Wait for Docker daemon to be ready",
+		"until docker info >/dev/null 2>&1; do",
+		"    echo 'Waiting for Docker daemon...'",
+		"    sleep 2",
+		"done",
+		"echo 'Docker daemon ready'",
+		"",
 		"# Build image with Docker",
 		fmt.Sprintf("docker build -f %s -t %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
-		"# Push temporary image to registry",
+		"# Push temporary image to registry", 
 		fmt.Sprintf("docker push %s", tempImageName),
 		"",
 		"echo 'Build completed successfully'",
@@ -116,9 +126,11 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							// Temporarily removed mount to test scheduling
 						},
 						Env: map[string]string{
-							"DOCKER_TLS_CERTDIR": "",       // Disable TLS for simplicity
-							"DOCKER_HOST":        "unix:///var/run/docker.sock", // Docker socket
-							"DOCKER_DRIVER":      "overlay2", // Use overlay2 storage driver
+							"DOCKER_TLS_CERTDIR":   "",       // Disable TLS for simplicity
+							"DOCKER_HOST":          "unix:///var/run/docker.sock", // Docker socket
+							"DOCKER_DRIVER":        "overlay2", // Use overlay2 storage driver
+							"TINI_SUBREAPER":       "1",      // Fix tini zombie reaping
+							"DOCKER_BUILDKIT":      "1",      // Enable BuildKit for better builds
 							// Docker-in-Docker configuration
 						},
 						Resources: &nomadapi.Resources{

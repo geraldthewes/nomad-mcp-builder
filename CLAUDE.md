@@ -72,6 +72,45 @@ Plan for:
 - Integration tests using mocked Nomad API
 - End-to-end test with actual hello-world Docker image build
 
+## Development and Deployment Workflow
+
+### Making Code Changes and Testing Fixes
+
+When making fixes to the codebase, follow this workflow to build, deploy, and test changes:
+
+1. **Make your code changes**
+2. **Build and push the Docker image:**
+   ```bash
+   make docker-push
+   ```
+   This builds the image and pushes it to `registry.cluster:5000/nomad-build-service:latest`
+
+3. **Deploy the updated service:**
+   ```bash
+   make nomad-restart
+   ```
+   This restarts the Nomad job to pull and run the latest image
+
+4. **Verify the deployment worked:**
+   ```bash
+   nomad job status nomad-build-service
+   nomad alloc logs -stderr <alloc-id>  # Check for any startup errors
+   ```
+
+### Job Management
+
+**IMPORTANT**: The Nomad job for this service is managed by Terraform in a separate repository, NOT by this codebase.
+
+The service can be restarted to pull new images using:
+```bash
+make nomad-restart
+# or directly: nomad job restart -yes nomad-build-service
+```
+
+### Testing Your Changes
+
+After deploying via the above workflow, you can test that job submission works correctly by submitting a test build job and verifying it gets placed and runs successfully on the Nomad cluster.
+
 ## Dependencies
 
 Requires:

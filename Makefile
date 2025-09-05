@@ -15,7 +15,7 @@ GOOS=$(shell go env GOOS)
 GOARCH=$(shell go env GOARCH)
 
 # Docker variables
-DOCKER_REGISTRY?=your-registry.com
+DOCKER_REGISTRY?=${REGISTRY_URL}
 DOCKER_TAG=${DOCKER_REGISTRY}/${IMAGE_NAME}:${VERSION}
 
 .PHONY: help build clean test lint docker-build docker-push deploy-dev deploy-prod
@@ -139,6 +139,11 @@ docker-run: ## Run Docker container locally
 docker-stop: ## Stop Docker container
 	@docker stop ${BINARY_NAME} || true
 	@docker rm ${BINARY_NAME} || true
+
+nomad-restart: ## Restart the Nomad service to pull latest image
+	@echo "Restarting Nomad service..."
+	@nomad job restart -yes nomad-build-service
+	@echo "Nomad service restarted successfully"
 
 # Database/Setup targets
 setup-dev: ## Set up development environment
