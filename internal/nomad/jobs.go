@@ -42,13 +42,15 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"#!/bin/sh",
 		"set -eu",  // Alpine sh doesn't support pipefail
 		"",
-		"# Clean Docker state to avoid database locks",
+		"# Clean Docker state to avoid database locks and speed startup",
 		"rm -rf /var/lib/docker/volumes/metadata.db*",
 		"rm -rf /var/lib/docker/buildkit",
+		"rm -rf /var/lib/docker/containers/*",  // Remove old container state
+		"rm -rf /var/lib/docker/network/files/*",  // Clean network state
 		"",
-		"# Start Docker daemon in background with cgroup v1 compatibility",
-		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --storage-driver=overlay2 --exec-opt native.cgroupdriver=cgroupfs --bridge=none --iptables=false --debug > /tmp/dockerd.log 2>&1 &",
-		"sleep 30",  // Give more time for daemon to start
+		"# Start Docker daemon in background with minimal overhead configuration",
+		"dockerd-entrypoint.sh --tls=false --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --storage-driver=overlay2 --exec-opt native.cgroupdriver=cgroupfs --bridge=none --iptables=false --ip-forward=false --userland-proxy=false --live-restore=false > /tmp/dockerd.log 2>&1 &",
+		"sleep 15",  // Reduced startup time with optimizations
 		"",
 		"# Install git if not available",
 		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
