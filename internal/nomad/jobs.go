@@ -47,8 +47,11 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"cd /tmp/repo",
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
-		"# Build image with Buildah",
-		fmt.Sprintf("buildah bud --isolation=chroot --file %s --tag %s .", 
+		"# Ensure cache directories exist and have proper permissions",
+		"mkdir -p /var/lib/containers /var/lib/shared /var/lib/containers/tmp",
+		"",
+		"# Build image with Buildah using layer caching",
+		fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
 		"# Authenticate with registry if credentials are provided and non-empty",
@@ -111,12 +114,14 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"volumes": []string{
 								"/opt/nomad/data/buildah-cache:/var/lib/containers:rw",
 								"/opt/nomad/data/buildah-shared:/var/lib/shared:ro", // Additional image stores
+								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates
 							},
 						},
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
 							"STORAGE_DRIVER":    "overlay",
 							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
+							"TMPDIR":            "/var/lib/containers/tmp", // Use persistent tmp for caching
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
@@ -124,12 +129,6 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							DiskMB:   intPtr(disk),
 						},
 						KillTimeout: &nc.config.Build.KillTimeout,
-						Vault: &nomadapi.Vault{
-							Policies:   []string{"nomad-build-service"},
-							ChangeMode: stringPtr("restart"),
-							Role:       "nomad-workloads", // Use the correct JWT role
-						},
-						Templates: buildTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -142,6 +141,18 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	}
 	
 	// KillTimeout is now set per task using configurable value
+	
+	// Add Vault integration and templates only if needed
+	templates := buildTemplates(job)
+	if len(templates) > 0 {
+		mainTask := jobSpec.TaskGroups[0].Tasks[0]
+		mainTask.Vault = &nomadapi.Vault{
+			Policies:   []string{"nomad-build-service"},
+			ChangeMode: stringPtr("restart"),
+			Role:       "nomad-workloads",
+		}
+		mainTask.Templates = templates
+	}
 	
 	return jobSpec, nil
 }
@@ -170,27 +181,51 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		nc.config.Build.RegistryConfig.TempPrefix, 
 		job.ID)
 	
-	// Build test commands
-	testCommands := []string{
-		"#!/bin/bash",
-		"set -euo pipefail",
-		"",
-		"# Pull the built image",
-		fmt.Sprintf("buildah pull docker://%s", tempImageName),
-		"",
-		"# Run each test command",
-	}
+	// Determine test mode and build appropriate commands
+	var testCommands []string
 	
-	for i, testCmd := range job.Config.TestCommands {
-		testCommands = append(testCommands, 
-			fmt.Sprintf("echo 'Running test %d: %s'", i+1, testCmd),
-			fmt.Sprintf("buildah run %s -- %s", tempImageName, testCmd),
-			"echo 'Test completed successfully'",
+	if len(job.Config.TestCommands) > 0 {
+		// Mode 1: Execute custom test commands inside the image
+		testCommands = []string{
+			"#!/bin/bash",
+			"set -euo pipefail",
 			"",
-		)
+			"# Pull the built image",
+			fmt.Sprintf("buildah pull docker://%s", tempImageName),
+			"",
+			"# Run each test command inside the container",
+		}
+		
+		for i, testCmd := range job.Config.TestCommands {
+			testCommands = append(testCommands, 
+				fmt.Sprintf("echo 'Running test %d: %s'", i+1, testCmd),
+				fmt.Sprintf("buildah run %s -- %s", tempImageName, testCmd),
+				"echo 'Test completed successfully'",
+				"",
+			)
+		}
+		testCommands = append(testCommands, "echo 'All custom tests completed successfully'")
+		
+	} else if job.Config.TestEntryPoint {
+		// Mode 2: Execute the image's entry point/CMD
+		testCommands = []string{
+			"#!/bin/bash",
+			"set -euo pipefail",
+			"",
+			"# Pull the built image",
+			fmt.Sprintf("buildah pull docker://%s", tempImageName),
+			"",
+			"# Execute the image's default entry point/CMD",
+			"echo 'Running image entry point...'",
+			fmt.Sprintf("buildah run %s", tempImageName), // No -- command, uses image's CMD/ENTRYPOINT
+			"echo 'Entry point execution completed successfully'",
+		}
+		
+	} else {
+		// This case should not occur since startTestPhase now checks for this condition
+		// and skips the test phase entirely, but we'll handle it gracefully
+		return nil, fmt.Errorf("internal error: test job created with no test configuration")
 	}
-	
-	testCommands = append(testCommands, "echo 'All tests completed successfully'")
 	
 	jobSpec := &nomadapi.Job{
 		ID:          &jobID,
@@ -260,12 +295,6 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							DiskMB:   intPtr(disk),
 						},
 						KillTimeout: &nc.config.Build.KillTimeout,
-						Vault: &nomadapi.Vault{
-							Policies:   []string{"nomad-build-service"},
-							ChangeMode: stringPtr("restart"),
-							Role:       "nomad-workloads", // Use the correct JWT role
-						},
-						Templates: testTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -273,6 +302,18 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 				},
 			},
 		},
+	}
+	
+	// Add Vault integration and templates only if needed
+	templates := testTemplates(job)
+	if len(templates) > 0 {
+		mainTask := jobSpec.TaskGroups[0].Tasks[0]
+		mainTask.Vault = &nomadapi.Vault{
+			Policies:   []string{"nomad-build-service"},
+			ChangeMode: stringPtr("restart"),
+			Role:       "nomad-workloads",
+		}
+		mainTask.Templates = templates
 	}
 	
 	return jobSpec, nil
@@ -379,12 +420,6 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							DiskMB:   intPtr(disk),
 						},
 						KillTimeout: &nc.config.Build.KillTimeout, // Configurable timeout
-						Vault: &nomadapi.Vault{
-							Policies:   []string{"nomad-build-service"},
-							ChangeMode: stringPtr("restart"),
-							Role:       "nomad-workloads", // Use the correct JWT role
-						},
-						Templates: publishTemplates(job),
 					},
 				},
 				EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -392,6 +427,18 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 				},
 			},
 		},
+	}
+	
+	// Add Vault integration and templates only if needed
+	templates := publishTemplates(job)
+	if len(templates) > 0 {
+		mainTask := jobSpec.TaskGroups[0].Tasks[0]
+		mainTask.Vault = &nomadapi.Vault{
+			Policies:   []string{"nomad-build-service"},
+			ChangeMode: stringPtr("restart"),
+			Role:       "nomad-workloads",
+		}
+		mainTask.Templates = templates
 	}
 	
 	return jobSpec, nil
@@ -484,9 +531,15 @@ func durationPtr(d string) *time.Duration {
 
 // buildTemplates creates Vault templates for a job, conditionally including registry credentials
 func buildTemplates(job *types.Job) []*nomadapi.Template {
-	templates := []*nomadapi.Template{
-		// Git credentials template (always included)
-		{
+	var templates []*nomadapi.Template
+	
+	// Debug logging
+	fmt.Printf("DEBUG: buildTemplates - GitCredentialsPath: '%s', RegistryCredentialsPath: '%s'\n", 
+		job.Config.GitCredentialsPath, job.Config.RegistryCredentialsPath)
+	
+	// Only add git credentials template if path is provided and not empty
+	if job.Config.GitCredentialsPath != "" {
+		gitTemplate := &nomadapi.Template{
 			DestPath:   stringPtr("/secrets/git-creds"),
 			ChangeMode: stringPtr("restart"),
 			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
@@ -496,7 +549,8 @@ export GIT_PASSWORD="{{ .Data.data.password }}"
 export GIT_SSH_KEY="{{ .Data.data.ssh_key }}"
 {{- end -}}
 `, job.Config.GitCredentialsPath)),
-		},
+		}
+		templates = append(templates, gitTemplate)
 	}
 	
 	// Only add registry credentials template if path is provided and not empty
