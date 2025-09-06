@@ -89,7 +89,9 @@ A build submission request from the agent could look like this:
 
     "/app/run\_integration\_tests.sh"
 
-  \]
+  \],
+  
+  "test_entry_point" : false
 
 }
 

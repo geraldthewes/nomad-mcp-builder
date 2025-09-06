@@ -46,16 +46,31 @@ The service will expose these MCP endpoints:
 - `killJob`: Terminate running jobs
 - Cleanup endpoint for resource management
 
-## Development Workflow (To Be Implemented)
+## Development Workflow
 
-Since this is a new project, you'll need to:
+**CRITICAL: Service Discovery**
+- The service runs in Nomad, NOT locally
+- NEVER use `localhost:8080` for testing
+- Always discover the service address using Consul:
+  ```bash
+  # Get service address and port
+  consul catalog services
+  consul catalog service nomad-build-service
+  ```
+- Use the discovered address for curl commands, e.g.:
+  ```bash
+  curl -X POST http://10.0.1.12:31183/mcp/submitJob \
+    -H "Content-Type: application/json" \
+    -d '{"jobConfig": {...}}'
+  ```
 
-1. Initialize Go module: `go mod init nomad-mcp-builder`
-2. Set up project structure with proper separation of concerns
-3. Implement MCP server handling
-4. Create Nomad job templates for build/test/publish phases
-5. Add comprehensive logging for agent debugging
-6. Implement proper error handling and cleanup
+**Development Steps:**
+1. Build: `make build`
+2. Deploy: `REGISTRY_URL=registry.cluster:5000 make nomad-restart`
+3. Discover service: `consul catalog service nomad-build-service`
+4. Test with discovered address: `curl -X POST http://<discovered-ip>:<discovered-port>/mcp/submitJob`
+
+**Do not assume your changes work without testing them immediately!**
 
 ## Critical Design Considerations
 
