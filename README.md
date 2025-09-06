@@ -527,12 +527,114 @@ Key log patterns to watch:
 - Network isolation during tests
 - Automatic resource cleanup
 
+## Testing
+
+### Unit Tests
+
+Run the basic unit tests:
+
+```bash
+go test ./pkg/... ./internal/... -v
+```
+
+### Integration Tests
+
+The project includes comprehensive integration tests that:
+
+- Discover the service via Consul service discovery
+- Submit real build jobs using the hello-world test repository
+- Monitor job progress until completion
+- Retrieve and save build/test logs
+- Generate detailed test reports with pass/fail status
+
+#### Running Integration Tests
+
+**Prerequisites:**
+- Nomad cluster running with the nomad-build-service deployed
+- Consul accessible for service discovery
+- Registry accessible at `registry.cluster:5000`
+
+**Run the full integration test:**
+
+```bash
+# Set Consul address if not default
+export CONSUL_HTTP_ADDR="10.0.1.12:8500"
+
+# Run the comprehensive integration test (15 minute timeout)
+go test -v ./test/integration -run TestConsulDiscoveryAndBuildWorkflow -timeout 15m
+```
+
+**Test Output:**
+
+The test automatically creates a `test_results/` directory with:
+
+- `build_logs_<job-id>.txt` - Complete build phase logs
+- `test_logs_<job-id>.txt` - Complete test phase logs  
+- `test_result_<job-id>.json` - JSON summary with test results
+
+**Example test result:**
+
+```json
+{
+  "job_id": "abc123-def456",
+  "build_success": true,
+  "test_success": true,
+  "build_logs": ["STEP 1/4: FROM alpine:latest", "..."],
+  "test_logs": ["Running entry point test", "..."],
+  "timestamp": "2025-09-06T18:45:00Z",
+  "duration": "2m15s"
+}
+```
+
+#### Manual Testing with curl
+
+You can also test manually after discovering the service:
+
+```bash
+# Discover service URL
+consul catalog service nomad-build-service
+
+# Submit test job (replace with discovered URL)
+curl -X POST http://10.0.1.12:31183/mcp/submitJob \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_config": {
+      "owner": "test",
+      "repo_url": "https://github.com/geraldthewes/docker-build-hello-world.git",
+      "git_ref": "main",
+      "dockerfile_path": "Dockerfile",
+      "image_tags": ["hello-world-test"],
+      "registry_url": "registry.cluster:5000/helloworld",
+      "test_commands": [],
+      "test_entry_point": true
+    }
+  }'
+
+# Check status (use returned job_id)
+curl -X POST http://10.0.1.12:31183/mcp/getStatus \
+  -H "Content-Type: application/json" \
+  -d '{"jobID":"<job-id>"}'
+
+# Get logs when complete
+curl -X POST http://10.0.1.12:31183/mcp/getLogs \
+  -H "Content-Type: application/json" \
+  -d '{"jobID":"<job-id>"}'
+```
+
+### Test Configuration
+
+The integration test is configurable via environment variables:
+
+- `CONSUL_HTTP_ADDR` - Consul address (default: `10.0.1.12:8500`)
+- Test timeout is set to 15 minutes to allow for complete build cycles
+
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Add tests for new functionality
-4. Submit a pull request
+4. Run integration tests to verify changes
+5. Submit a pull request
 
 ## License
 
