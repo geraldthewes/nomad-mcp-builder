@@ -39,87 +39,33 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	
 	// Build the task commands
 	buildCommands := []string{
-		"#!/bin/sh",
-		"set -e",  // Removed -u flag that might cause issues with unset vars
+		"#!/bin/bash",
+		"set -euo pipefail",
 		"",
-		"echo 'Starting Docker-in-Docker build process...'",
-		"# Clean Docker state carefully to avoid database locks",
-		"rm -rf /var/lib/docker/volumes/metadata.db* || true",
-		"rm -rf /var/lib/docker/buildkit || true", 
-		"# Clean old stopped containers but preserve directory structure",
-		"find /var/lib/docker/containers -name 'config.v2.json' -delete 2>/dev/null || true",
-		"# Clean network state to prevent controller timeouts", 
-		"rm -rf /var/lib/docker/network/files/local-kv.db || true",
-		"",
-		"# Initialize cgroup v2 for Docker-in-Docker (based on 2024 best practices)",
-		"if [ -f /sys/fs/cgroup/cgroup.controllers ]; then",
-		"    echo 'Setting up cgroup v2 for DinD...'",
-		"    # Move processes from root group to init group",
-		"    mkdir -p /sys/fs/cgroup/init",
-		"    xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true",
-		"    # Enable controllers for nested cgroups",
-		"    sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true",
-		"fi",
-		"",
-		"# Create minimal daemon configuration for BuildKit",
-		"mkdir -p /etc/docker",
-		"cat > /etc/docker/daemon.json << 'EOF'",
-		"{",
-		"  \"features\": { \"buildkit\": true },", 
-		"  \"storage-driver\": \"overlay2\",",
-		"  \"exec-opts\": [\"native.cgroupdriver=cgroupfs\"],",
-		"  \"live-restore\": false",
-		"}",
-		"EOF",
-		"",
-		"# Start Docker daemon with standard DinD configuration",
-		"echo 'Starting Docker daemon for DinD...'",
-		"dockerd --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock --tls=false --config-file=/etc/docker/daemon.json > /tmp/dockerd.log 2>&1 &",
-		"DOCKERD_PID=$!",
-		"sleep 15",  // Give daemon time to start
-		"",
-		"# Install git if not available",
-		"if ! command -v git >/dev/null 2>&1; then",  // Alpine sh syntax
-		"    apk add --no-cache git",
-		"fi",
-		"",
-		"# Clean up any existing repo directory",
-		"rm -rf /tmp/repo",
-		"",
-		"# Clone repository",
+		"# Clone repository", 
 		fmt.Sprintf("git clone %s /tmp/repo", job.Config.RepoURL),
 		"cd /tmp/repo",
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
-		"# Wait for Docker daemon to be ready",
-		"echo 'Waiting for Docker daemon to become ready...'",
-		"retries=0",
-		"until docker info >/dev/null 2>&1; do",
-		"    echo 'Waiting for Docker daemon... (attempt $((retries + 1)))'",
-		"    retries=$((retries + 1))",
-		"    if [ $retries -gt 20 ]; then",
-		"        echo 'Docker daemon failed to start after 40 seconds. Checking logs:'",
-		"        echo '=== Docker daemon logs ==='",
-		"        cat /tmp/dockerd.log || echo 'No daemon logs available'",
-		"        echo '=== Process status ==='",
-		"        ps aux | grep dockerd || echo 'No dockerd processes found'",
-		"        echo 'Exiting with failure'",
-		"        exit 1",
-		"    fi",
-		"    sleep 2",
-		"done",
-		"echo 'Docker daemon is ready!'",
-		"",
-		"# Use BuildKit with proper configuration",
-		"export DOCKER_BUILDKIT=1",
-		"export BUILDKIT_PROGRESS=plain",
-		"",
-		"# Build image with Docker using BuildKit", 
-		fmt.Sprintf("docker build --no-cache -f %s -t %s .", 
+		"# Build image with Buildah",
+		fmt.Sprintf("buildah bud --isolation=chroot --file %s --tag %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
-		"# Push temporary image to registry", 
-		fmt.Sprintf("docker push %s", tempImageName),
+		"# Authenticate with registry if credentials are provided and non-empty",
+		"if [ -f /secrets/registry-creds ]; then",
+		"  source /secrets/registry-creds",
+		"  if [ -n \"$REGISTRY_USERNAME\" ] && [ -n \"$REGISTRY_PASSWORD\" ]; then",
+		"    echo 'Logging in to registry with credentials...'",
+		fmt.Sprintf("    buildah login --username \"$REGISTRY_USERNAME\" --password \"$REGISTRY_PASSWORD\" %s", registryHost(tempImageName)),
+		"  else",
+		"    echo 'No registry credentials provided, attempting anonymous push...'",
+		"  fi",
+		"else",
+		"  echo 'No registry credentials file, attempting anonymous push...'",
+		"fi",
+		"",
+		"# Push temporary image to registry",
+		fmt.Sprintf("buildah push %s docker://%s", tempImageName, tempImageName),
 		"",
 		"echo 'Build completed successfully'",
 	}
@@ -148,40 +94,29 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 						Name:   "main",
 						Driver: "docker",
 						Config: map[string]interface{}{
-							"image": "docker:24-dind",  // Use Docker-in-Docker instead of Buildah
-							"command": "/bin/sh",       // Alpine uses /bin/sh not /bin/bash
+							"image": "quay.io/buildah/stable:latest",
+							"command": "/bin/bash",
 							"args": []string{"-c", strings.Join(buildCommands, "\n")},
-							"privileged": true,  // Enable privileged mode for cgroup access
-							// Add capabilities required for Buildah user namespaces
-							"cap_add": []string{
-								"SYS_ADMIN",     // Required for mount operations
-								"SETUID",        // Required for user namespace operations
-								"SETGID",        // Required for user namespace operations
-								"SYS_CHROOT",    // Required for chroot operations
+							"privileged": false, // Use proper security configuration instead of privileged
+							"devices": []map[string]interface{}{
+								{
+									"host_path":      "/dev/fuse",
+									"container_path": "/dev/fuse",
+								},
 							},
-							// Enable user namespace mapping
-							"userns_mode": "host",
-							// Add security options for user namespace
 							"security_opt": []string{
-								"seccomp=unconfined",
+								"seccomp=unconfined", // Required for Buildah syscalls
 								"apparmor=unconfined",
 							},
-							// Mount cgroup filesystem for container management  
 							"volumes": []string{
-								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
-								"/var/lib/docker:/var/lib/docker:rw", // Mount Docker storage
-								"/tmp:/tmp:rw",  // Ensure tmp is writable
+								"/opt/nomad/data/buildah-cache:/var/lib/containers:rw",
+								"/opt/nomad/data/buildah-shared:/var/lib/shared:ro", // Additional image stores
 							},
-							// Temporarily removed mount to test scheduling
 						},
 						Env: map[string]string{
-							"DOCKER_TLS_CERTDIR":   "",         // Disable TLS for simplicity
-							"DOCKER_HOST":          "unix:///var/run/docker.sock", // Docker socket
-							"DOCKER_DRIVER":        "overlay2", // Use overlay2 storage driver
-							"TINI_SUBREAPER":       "1",        // Fix tini zombie reaping
-							"DOCKER_BUILDKIT":      "1",        // Enable BuildKit with proper cgroup support
-							"BUILDKIT_PROGRESS":    "plain",    // Use plain progress output
-							// Docker-in-Docker configuration for cgroup v2 compatibility
+							"BUILDAH_ISOLATION": "chroot",
+							"STORAGE_DRIVER":    "overlay",
+							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),
@@ -398,7 +333,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 				Count:       intPtr(1),
 				Constraints: []*nomadapi.Constraint{}, // Override automatic constraints
 				RestartPolicy: &nomadapi.RestartPolicy{
-					Attempts: intPtr(1), // Allow one retry for publish
+					Attempts: intPtr(0), // No restart for publish jobs
 				},
 				Tasks: []*nomadapi.Task{
 					{
@@ -624,4 +559,14 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 	}
 	
 	return templates
+}
+
+// registryHost extracts the registry host from an image name
+// e.g., "registry.cluster:5000/bdtemp/image:tag" -> "registry.cluster:5000"
+func registryHost(imageName string) string {
+	parts := strings.Split(imageName, "/")
+	if len(parts) > 1 && strings.Contains(parts[0], ":") {
+		return parts[0]
+	}
+	return "docker.io" // default to Docker Hub if no registry specified
 }

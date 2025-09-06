@@ -109,7 +109,54 @@ make nomad-restart
 
 ### Testing Your Changes
 
-After deploying via the above workflow, you can test that job submission works correctly by submitting a test build job and verifying it gets placed and runs successfully on the Nomad cluster.
+**CRITICAL**: After deploying via the above workflow, you MUST immediately test that your changes work by submitting a test build job.
+
+#### Step 1: Find the Service URL
+
+The service registers itself in Consul with dynamic ports. Find the current URL:
+
+```bash
+# Method 1: Check Consul service registry
+curl -s http://10.0.1.12:8500/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
+
+# Method 2: Check Nomad allocation 
+nomad job status nomad-build-service  # Get allocation ID
+nomad alloc status <alloc-id>         # Look for "Allocation Addresses" section
+```
+
+#### Step 2: Submit Test Build Job
+
+Use this exact test command with the discovered URL:
+
+```bash
+# Replace <SERVICE_URL> with the URL from Step 1
+curl -X POST http://<SERVICE_URL>/mcp/submitJob \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jobConfig": {
+      "owner": "claude-test",
+      "repoURL": "https://github.com/geraldthewes/bd",
+      "gitRef": "main", 
+      "dockerfilePath": "Dockerfile",
+      "imageTags": ["test"],
+      "registryURL": "registry.cluster:5000/bdtemp",
+      "testCommands": ["echo test"]
+    }
+  }'
+```
+
+#### Step 3: Monitor Job Progress
+
+```bash
+# Get the job ID from the response and monitor it
+nomad job status build-<job-id>
+nomad alloc logs -f <alloc-id>  # Follow build progress and check for errors
+
+# Check final status
+curl http://<SERVICE_URL>/mcp/getStatus -H "Content-Type: application/json" -d '{"jobID":"<job-id>"}'
+```
+
+**Do not assume your changes work without testing them immediately!**
 
 ## Dependencies
 
