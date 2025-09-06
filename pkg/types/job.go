@@ -25,6 +25,7 @@ type JobConfig struct {
 	RegistryURL             string   `json:"registry_url"`
 	RegistryCredentialsPath string   `json:"registry_credentials_path"`
 	TestCommands            []string `json:"test_commands"`
+	TestEntryPoint          bool     `json:"test_entry_point,omitempty"`
 	ResourceLimits          *ResourceLimits `json:"resource_limits,omitempty"`
 	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty"`
 	TestTimeout             *time.Duration  `json:"test_timeout,omitempty"`

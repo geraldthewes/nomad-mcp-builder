@@ -71,6 +71,7 @@ type BuildConfig struct {
 	KillTimeout           time.Duration     `json:"kill_timeout"`
 	RegistryConfig        RegistryConfig    `json:"registry_config"`
 	BuildCachePath        string            `json:"build_cache_path"`
+	LogRetentionDays      int               `json:"log_retention_days"`
 }
 
 type ResourceLimits struct {
@@ -141,7 +142,8 @@ func Load() (*Config, error) {
 				Username:   getEnv("REGISTRY_USERNAME", ""),
 				Password:   getEnv("REGISTRY_PASSWORD", ""),
 			},
-			BuildCachePath: getEnv("BUILD_CACHE_PATH", "/opt/nomad/data/buildah-cache"),
+			BuildCachePath:   getEnv("BUILD_CACHE_PATH", "/opt/nomad/data/buildah-cache"),
+			LogRetentionDays: getEnvInt("LOG_RETENTION_DAYS", 7),
 		},
 		Monitoring: MonitoringConfig{
 			Enabled:     getEnvBool("MONITORING_ENABLED", true),

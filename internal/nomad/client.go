@@ -88,6 +88,14 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	
 	evalID, _, err := nc.client.Jobs().RegisterOpts(buildJobSpec, registerOpts, writeOpts)
 	if err != nil {
+		// Check for specific Vault template errors and provide better feedback
+		errorMsg := err.Error()
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
+			return nil, fmt.Errorf("vault template error: empty or invalid secret path provided. Please check that GitCredentialsPath and RegistryCredentialsPath are valid Vault paths or leave them empty if not needed. Original error: %w", err)
+		}
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read") {
+			return nil, fmt.Errorf("vault template error: failed to read secret from Vault. Please verify the secret path exists and the service has proper permissions. Original error: %w", err)
+		}
 		return nil, fmt.Errorf("failed to submit build job to Nomad: %w", err)
 	}
 	
@@ -117,7 +125,12 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "running":
 			job.Status = types.StatusBuilding
 		case "complete":
-			// Build completed, start test phase
+			// Build completed, capture logs before they disappear
+			if err := nc.capturePhaseLogs(job, "build"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture build logs")
+			}
+			
+			// Start test phase
 			if job.Status == types.StatusBuilding {
 				if err := nc.startTestPhase(job); err != nil {
 					job.Status = types.StatusFailed
@@ -129,6 +142,11 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				}
 			}
 		case "failed":
+			// Capture logs from failed build before they disappear
+			if err := nc.capturePhaseLogs(job, "build"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture failed build logs")
+			}
+			
 			job.Status = types.StatusFailed
 			job.FailedPhase = "build"
 			// Get detailed error information
@@ -154,7 +172,12 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "running":
 			job.Status = types.StatusTesting
 		case "complete":
-			// Tests completed, start publish phase
+			// Tests completed, capture logs before they disappear
+			if err := nc.capturePhaseLogs(job, "test"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture test logs")
+			}
+			
+			// Start publish phase
 			if job.Status == types.StatusTesting {
 				if err := nc.startPublishPhase(job); err != nil {
 					job.Status = types.StatusFailed
@@ -166,6 +189,11 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				}
 			}
 		case "failed":
+			// Capture logs from failed test before they disappear
+			if err := nc.capturePhaseLogs(job, "test"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture failed test logs")
+			}
+			
 			job.Status = types.StatusFailed
 			job.FailedPhase = "test"
 			// Get detailed error information
@@ -191,10 +219,20 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		case "running":
 			job.Status = types.StatusPublishing
 		case "complete":
+			// Publish completed, capture logs before they disappear
+			if err := nc.capturePhaseLogs(job, "publish"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture publish logs")
+			}
+			
 			job.Status = types.StatusSucceeded
 			now := time.Now()
 			job.FinishedAt = &now
 		case "failed":
+			// Capture logs from failed publish before they disappear
+			if err := nc.capturePhaseLogs(job, "publish"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture failed publish logs")
+			}
+			
 			job.Status = types.StatusFailed
 			job.FailedPhase = "publish"
 			// Get detailed error information
@@ -516,8 +554,9 @@ func (nc *Client) getJobErrorDetails(nomadJobID string) (string, error) {
 }
 
 func (nc *Client) startTestPhase(job *types.Job) error {
-	if len(job.Config.TestCommands) == 0 {
-		// No tests to run, skip to publish phase
+	if len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint {
+		// No tests configured, skip to publish phase
+		nc.logger.WithField("job_id", job.ID).Info("No tests configured, skipping test phase")
 		return nc.startPublishPhase(job)
 	}
 	
@@ -541,6 +580,14 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 	
 	evalID, _, err := nc.client.Jobs().RegisterOpts(testJobSpec, registerOpts, writeOpts)
 	if err != nil {
+		// Check for specific Vault template errors and provide better feedback
+		errorMsg := err.Error()
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
+			return fmt.Errorf("vault template error in test job: empty or invalid secret path provided. Please check that RegistryCredentialsPath is a valid Vault path or leave it empty if not needed. Original error: %w", err)
+		}
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read") {
+			return fmt.Errorf("vault template error in test job: failed to read secret from Vault. Please verify the secret path exists and the service has proper permissions. Original error: %w", err)
+		}
 		return fmt.Errorf("failed to submit test job to Nomad: %w", err)
 	}
 	
@@ -576,6 +623,14 @@ func (nc *Client) startPublishPhase(job *types.Job) error {
 	
 	evalID, _, err := nc.client.Jobs().RegisterOpts(publishJobSpec, registerOpts, writeOpts)
 	if err != nil {
+		// Check for specific Vault template errors and provide better feedback
+		errorMsg := err.Error()
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
+			return fmt.Errorf("vault template error in publish job: empty or invalid secret path provided. Please check that RegistryCredentialsPath is a valid Vault path or leave it empty if not needed. Original error: %w", err)
+		}
+		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read") {
+			return fmt.Errorf("vault template error in publish job: failed to read secret from Vault. Please verify the secret path exists and the service has proper permissions. Original error: %w", err)
+		}
 		return fmt.Errorf("failed to submit publish job to Nomad: %w", err)
 	}
 	
@@ -849,4 +904,48 @@ func (nc *Client) JobSpecToHCL(jobSpec *nomadapi.Job) (string, error) {
 	hcl.WriteString("}\n")
 	
 	return hcl.String(), nil
+}
+
+// capturePhaseLogs captures logs from a completed phase and stores them persistently
+func (nc *Client) capturePhaseLogs(job *types.Job, phase string) error {
+	var jobID string
+	
+	switch phase {
+	case "build":
+		jobID = job.BuildJobID
+	case "test":
+		jobID = job.TestJobID
+	case "publish":
+		jobID = job.PublishJobID
+	default:
+		return fmt.Errorf("unknown phase: %s", phase)
+	}
+	
+	if jobID == "" {
+		return nil // No job to capture logs from
+	}
+	
+	// Get logs from the completed job
+	logs, err := nc.getJobLogs(jobID)
+	if err != nil {
+		return fmt.Errorf("failed to get logs for %s phase: %w", phase, err)
+	}
+	
+	// Store logs in the job structure based on phase
+	switch phase {
+	case "build":
+		job.Logs.Build = logs
+	case "test":
+		job.Logs.Test = logs
+	case "publish":
+		job.Logs.Publish = logs
+	}
+	
+	nc.logger.WithFields(logrus.Fields{
+		"job_id": job.ID,
+		"phase":  phase,
+		"log_lines": len(logs),
+	}).Info("Captured phase logs")
+	
+	return nil
 }

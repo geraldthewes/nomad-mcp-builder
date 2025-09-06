@@ -97,6 +97,12 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Validate required fields
+	if err := validateJobConfig(&req.JobConfig); err != nil {
+		s.writeErrorResponse(w, "Job configuration validation failed", http.StatusBadRequest, err.Error())
+		return
+	}
+	
 	// Create new job
 	job, err := s.nomadClient.CreateJob(&req.JobConfig)
 	if err != nil {
@@ -528,12 +534,18 @@ func (s *Server) backgroundCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Cleanup old job history (older than 30 days)
-			if err := s.storage.CleanupOldHistory(30 * 24 * time.Hour); err != nil {
+			// Get configurable retention period, default to 7 days
+			retentionDays := s.config.Build.LogRetentionDays
+			if retentionDays <= 0 {
+				retentionDays = 7 // Default to 7 days
+			}
+			
+			// Only cleanup old job history automatically - normal cleanup should be done explicitly
+			if err := s.storage.CleanupOldHistory(time.Duration(retentionDays) * 24 * time.Hour); err != nil {
 				s.logger.WithError(err).Warn("Failed to cleanup old job history")
 			}
 			
-			// Cleanup zombie jobs
+			// Cleanup zombie jobs (jobs running longer than 24 hours without updates)
 			if _, err := s.cleanupZombieJobs(); err != nil {
 				s.logger.WithError(err).Warn("Failed to cleanup zombie jobs")
 			}
@@ -971,4 +983,37 @@ func (s *Server) writeMCPResponse(w http.ResponseWriter, response MCPResponse) {
 		s.logger.WithError(err).Error("Failed to encode MCP response")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+// validateJobConfig validates the job configuration and returns an error if validation fails
+func validateJobConfig(config *types.JobConfig) error {
+	// Required fields
+	if config.Owner == "" {
+		return fmt.Errorf("owner is required")
+	}
+	if config.RepoURL == "" {
+		return fmt.Errorf("repo_url is required")
+	}
+	if config.GitRef == "" {
+		return fmt.Errorf("git_ref is required")
+	}
+	if config.DockerfilePath == "" {
+		return fmt.Errorf("dockerfile_path is required")
+	}
+	if len(config.ImageTags) == 0 {
+		return fmt.Errorf("image_tags is required and cannot be empty")
+	}
+	if config.RegistryURL == "" {
+		return fmt.Errorf("registry_url is required")
+	}
+	
+	// Validate at least one testing mode is specified if test_commands is empty
+	if len(config.TestCommands) == 0 && !config.TestEntryPoint {
+		// This is allowed - no testing will be performed
+	}
+	
+	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands)
+	// are allowed to be empty
+	
+	return nil
 }
