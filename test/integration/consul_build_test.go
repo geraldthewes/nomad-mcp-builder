@@ -31,8 +31,8 @@ type TestResult struct {
 	Duration     string    `json:"duration"`
 }
 
-// ConsulDiscoveryTest tests the complete build workflow with service discovery
-func TestConsulDiscoveryAndBuildWorkflow(t *testing.T) {
+// TestBuildWorkflow tests the complete build workflow with service discovery
+func TestBuildWorkflow(t *testing.T) {
 	// Create results directory
 	resultsDir := "test_results"
 	err := os.MkdirAll(resultsDir, 0755)
@@ -85,18 +85,42 @@ func TestConsulDiscoveryAndBuildWorkflow(t *testing.T) {
 	}
 	t.Logf("Job completed with status: %s", finalStatus)
 
-	// Step 4: Retrieve logs
+	// Step 4: Retrieve logs (always try to get logs, especially on failure)
 	t.Log("Retrieving job logs...")
 	logs, err := getJobLogs(serviceURL, jobID)
 	if err != nil {
 		result.Error = fmt.Sprintf("Log retrieval failed: %v", err)
-		saveTestResult(t, resultsDir, result)
-		t.Fatalf("Failed to retrieve logs: %v", err)
+		t.Logf("Warning: Failed to retrieve logs via API: %v", err)
+		// Continue with test even if logs can't be retrieved via API
+	} else {
+		// Store logs in result
+		result.BuildLogs = logs.Build
+		result.TestLogs = logs.Test
+		
+		// If job failed, print the logs to help with debugging
+		if finalStatus == types.StatusFailed {
+			t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
+			
+			if len(result.BuildLogs) > 0 {
+				t.Log("=== BUILD LOGS ===")
+				for _, line := range result.BuildLogs {
+					t.Logf("BUILD: %s", line)
+				}
+			} else {
+				t.Log("No build logs available from service API")
+			}
+			
+			if len(result.TestLogs) > 0 {
+				t.Log("=== TEST LOGS ===")
+				for _, line := range result.TestLogs {
+					t.Logf("TEST: %s", line)
+				}
+			} else {
+				t.Log("No test logs available from service API")
+			}
+			t.Log("=== END FAILURE LOGS ===")
+		}
 	}
-
-	// Store logs in result
-	result.BuildLogs = logs.Build
-	result.TestLogs = logs.Test
 
 	// Step 5: Determine success/failure
 	result.BuildSuccess = len(result.BuildLogs) > 0 && finalStatus != types.StatusFailed

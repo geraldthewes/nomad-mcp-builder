@@ -473,33 +473,130 @@ func (nc *Client) getJobLogs(nomadJobID string) ([]string, error) {
 	// Get allocations for the job
 	allocs, _, err := nc.client.Jobs().Allocations(nomadJobID, false, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get allocations for job %s: %w", nomadJobID, err)
 	}
+	
+	if len(allocs) == 0 {
+		nc.logger.WithField("job_id", nomadJobID).Warn("No allocations found for job")
+		return []string{"No allocations found - job may have failed to schedule"}, nil
+	}
+	
+	var allLogs []string
+	
+	// Process each allocation
+	for _, alloc := range allocs {
+		// Get logs from each task in the allocation
+		for taskName := range alloc.TaskStates {
+			// Get stdout logs
+			stdoutLogs, err := nc.getTaskLogs(alloc.ID, taskName, "stdout")
+			if err != nil {
+				nc.logger.WithError(err).WithFields(logrus.Fields{
+					"alloc_id": alloc.ID,
+					"task": taskName,
+				}).Warn("Failed to get stdout logs")
+			} else {
+				for _, line := range stdoutLogs {
+					if strings.TrimSpace(line) != "" {
+						allLogs = append(allLogs, fmt.Sprintf("[%s/stdout] %s", taskName, line))
+					}
+				}
+			}
+			
+			// Get stderr logs
+			stderrLogs, err := nc.getTaskLogs(alloc.ID, taskName, "stderr")
+			if err != nil {
+				nc.logger.WithError(err).WithFields(logrus.Fields{
+					"alloc_id": alloc.ID,
+					"task": taskName,
+				}).Warn("Failed to get stderr logs")
+			} else {
+				for _, line := range stderrLogs {
+					if strings.TrimSpace(line) != "" {
+						allLogs = append(allLogs, fmt.Sprintf("[%s/stderr] %s", taskName, line))
+					}
+				}
+			}
+		}
+	}
+	
+	if len(allLogs) == 0 {
+		// If no logs found, try to get allocation failure information
+		for _, alloc := range allocs {
+			if alloc.ClientStatus == "failed" {
+				allLogs = append(allLogs, fmt.Sprintf("Allocation %s failed", alloc.ID))
+				
+				// Add task state information
+				for taskName, taskState := range alloc.TaskStates {
+					if taskState.Failed {
+						allLogs = append(allLogs, fmt.Sprintf("Task %s failed in state: %s", taskName, taskState.State))
+						
+						// Add task events
+						for _, event := range taskState.Events {
+							allLogs = append(allLogs, fmt.Sprintf("Task %s event: %s - %s", taskName, event.Type, event.DisplayMessage))
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return allLogs, nil
+}
+
+// getTaskLogs retrieves logs for a specific task in an allocation
+func (nc *Client) getTaskLogs(allocID, taskName, logType string) ([]string, error) {
+	// Get allocation info first
+	alloc, _, err := nc.client.Allocations().Info(allocID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allocation info for %s: %w", allocID, err)
+	}
+	
+	// Use the correct Logs API signature
+	logStreamChan, errChan := nc.client.AllocFS().Logs(
+		alloc,     // *Allocation
+		false,     // follow
+		taskName,  // task name 
+		logType,   // log type (stdout/stderr)
+		"start",   // origin
+		0,         // offset
+		make(chan struct{}), // cancel chan
+		nil,       // query options
+	)
 	
 	var logs []string
-	for _, alloc := range allocs {
-		// Get full allocation details
-		allocDetail, _, err := nc.client.Allocations().Info(alloc.ID, nil)
-		if err != nil {
-			continue
-		}
-		
-		// Try to get logs using ReadAt (this is a simplified approach)
-		logReader, err := nc.client.AllocFS().ReadAt(allocDetail, "/alloc/logs/main.stdout.0", 0, 0, nil)
-		if err != nil {
-			continue
-		}
-		defer logReader.Close()
-		
-		// Read the log data
-		buffer := make([]byte, 4096)
-		n, err := logReader.Read(buffer)
-		if err == nil && n > 0 {
-			logs = append(logs, string(buffer[:n]))
+	
+	// Read from both stream and error channels
+	for {
+		select {
+		case frame, ok := <-logStreamChan:
+			if !ok {
+				// Channel closed, we're done
+				return logs, nil
+			}
+			if frame.Data != nil && len(frame.Data) > 0 {
+				// Split the frame data into lines
+				content := string(frame.Data)
+				lines := strings.Split(content, "\n")
+				for _, line := range lines {
+					if strings.TrimSpace(line) != "" {
+						logs = append(logs, line)
+					}
+				}
+			}
+			// Since we're not following, we can break after receiving some data
+			if len(frame.Data) == 0 && len(logs) > 0 {
+				return logs, nil
+			}
+		case err, ok := <-errChan:
+			if !ok {
+				// Error channel closed
+				return logs, nil
+			}
+			if err != nil {
+				return logs, fmt.Errorf("error reading logs: %w", err)
+			}
 		}
 	}
-	
-	return logs, nil
 }
 
 func (nc *Client) getJobErrorDetails(nomadJobID string) (string, error) {
