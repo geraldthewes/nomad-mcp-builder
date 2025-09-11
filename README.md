@@ -242,8 +242,10 @@ plugin "docker" {
 ### MCP Endpoints
 
 - `POST /mcp/submitJob` - Submit a new build job
-- `POST /mcp/getStatus` - Get job status
-- `POST /mcp/getLogs` - Get job logs
+- `POST /mcp/getStatus` - Get job status (legacy)
+- `POST /mcp/getLogs` - Get job logs (legacy)
+- `GET /mcp/job/{jobID}/status` - Get job status (RESTful)
+- `GET /mcp/job/{jobID}/logs` - Get job logs (RESTful)
 - `GET /mcp/streamLogs?job_id=<id>` - WebSocket log streaming
 - `POST /mcp/killJob` - Terminate a job
 - `POST /mcp/cleanup` - Cleanup resources
@@ -286,6 +288,10 @@ curl -X POST http://localhost:8080/mcp/submitJob \
 ### Check Job Status
 
 ```bash
+# RESTful endpoint (recommended)
+curl http://localhost:8080/mcp/job/550e8400-e29b-41d4-a716-446655440000/status
+
+# Legacy POST endpoint
 curl -X POST http://localhost:8080/mcp/getStatus \
   -H "Content-Type: application/json" \
   -d '{"job_id": "550e8400-e29b-41d4-a716-446655440000"}'
@@ -612,15 +618,11 @@ curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/submitJob \
     }
   }'
 
-# Check status (use returned job_id)
-curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/getStatus \
-  -H "Content-Type: application/json" \
-  -d '{"jobID":"<job-id>"}'
+# Check status (use returned job_id) - RESTful endpoint
+curl http://${SERVICE_URL:-localhost:8080}/mcp/job/<job-id>/status
 
-# Get logs when complete
-curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/getLogs \
-  -H "Content-Type: application/json" \
-  -d '{"jobID":"<job-id>"}'
+# Get logs when complete - RESTful endpoint
+curl http://${SERVICE_URL:-localhost:8080}/mcp/job/<job-id>/logs
 ```
 
 ### Test Configuration

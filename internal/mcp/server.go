@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,6 +61,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/mcp/killJob", s.handleKillJob)
 	mux.HandleFunc("/mcp/cleanup", s.handleCleanup)
 	mux.HandleFunc("/mcp/getHistory", s.handleGetHistory)
+	
+	// Register RESTful endpoints
+	mux.HandleFunc("/mcp/job/", s.handleJobResource)
 	
 	// Register Standard MCP Protocol endpoints
 	mux.HandleFunc("/mcp", s.handleMCPRequest)     // JSON-RPC over HTTP
@@ -1016,4 +1020,108 @@ func validateJobConfig(config *types.JobConfig) error {
 	// are allowed to be empty
 	
 	return nil
+}
+
+// handleJobResource handles RESTful job resource endpoints
+// Routes: GET /mcp/job/{jobID}/status and GET /mcp/job/{jobID}/logs
+func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Parse URL path: /mcp/job/{jobID}/{resource}
+	path := strings.TrimPrefix(r.URL.Path, "/mcp/job/")
+	parts := strings.Split(path, "/")
+	
+	if len(parts) != 2 {
+		http.Error(w, "Invalid path format. Expected: /mcp/job/{jobID}/{status|logs}", http.StatusBadRequest)
+		return
+	}
+	
+	jobID := parts[0]
+	resource := parts[1]
+	
+	if jobID == "" {
+		http.Error(w, "Job ID is required", http.StatusBadRequest)
+		return
+	}
+	
+	switch resource {
+	case "status":
+		s.handleJobStatus(w, r, jobID)
+	case "logs":
+		s.handleJobLogs(w, r, jobID)
+	default:
+		http.Error(w, "Invalid resource. Expected: status or logs", http.StatusBadRequest)
+	}
+}
+
+// handleJobStatus handles GET /mcp/job/{jobID}/status
+func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID string) {
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get job")
+		s.writeErrorResponse(w, "Failed to get job", http.StatusInternalServerError, "")
+		return
+	}
+	
+	if job == nil {
+		s.writeErrorResponse(w, "Job not found", http.StatusNotFound, "")
+		return
+	}
+	
+	// Update job status before returning
+	updatedJob, err := s.nomadClient.UpdateJobStatus(job)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to update job status")
+		// Continue with existing job data rather than failing
+		updatedJob = job
+	}
+	
+	response := types.GetStatusResponse{
+		JobID:   updatedJob.ID,
+		Status:  updatedJob.Status,
+		Metrics: updatedJob.Metrics,
+		Error:   updatedJob.Error,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.WithError(err).Error("Failed to encode status response")
+		s.writeErrorResponse(w, "Failed to encode response", http.StatusInternalServerError, "")
+	}
+}
+
+// handleJobLogs handles GET /mcp/job/{jobID}/logs
+func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	job, err := s.storage.GetJob(jobID)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get job")
+		s.writeErrorResponse(w, "Failed to get job", http.StatusInternalServerError, "")
+		return
+	}
+	
+	if job == nil {
+		s.writeErrorResponse(w, "Job not found", http.StatusNotFound, "")
+		return
+	}
+	
+	logs, err := s.nomadClient.GetJobLogs(job)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get job logs")
+		s.writeErrorResponse(w, "Failed to get job logs", http.StatusInternalServerError, "")
+		return
+	}
+	
+	response := types.GetLogsResponse{
+		JobID: job.ID,
+		Logs:  logs,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.WithError(err).Error("Failed to encode logs response")
+		s.writeErrorResponse(w, "Failed to encode response", http.StatusInternalServerError, "")
+	}
 }

@@ -275,12 +275,6 @@ func monitorJobUntilComplete(serviceURL, jobID string, timeout time.Duration) (t
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	statusReq := types.GetStatusRequest{JobID: jobID}
-	reqBody, err := json.Marshal(statusReq)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal status request: %w", err)
-	}
-
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -289,7 +283,8 @@ func monitorJobUntilComplete(serviceURL, jobID string, timeout time.Duration) (t
 		case <-ctx.Done():
 			return types.StatusFailed, fmt.Errorf("job monitoring timed out after %v", timeout)
 		case <-ticker.C:
-			resp, err := http.Post(serviceURL+"/mcp/getStatus", "application/json", bytes.NewBuffer(reqBody))
+			url := fmt.Sprintf("%s/mcp/job/%s/status", serviceURL, jobID)
+			resp, err := http.Get(url)
 			if err != nil {
 				continue // Retry on error
 			}
@@ -317,15 +312,10 @@ func monitorJobUntilComplete(serviceURL, jobID string, timeout time.Duration) (t
 	}
 }
 
-// getJobLogs retrieves logs for a job
+// getJobLogs retrieves logs for a job using RESTful endpoint
 func getJobLogs(serviceURL, jobID string) (types.JobLogs, error) {
-	logsReq := types.GetLogsRequest{JobID: jobID}
-	reqBody, err := json.Marshal(logsReq)
-	if err != nil {
-		return types.JobLogs{}, fmt.Errorf("failed to marshal logs request: %w", err)
-	}
-
-	resp, err := http.Post(serviceURL+"/mcp/getLogs", "application/json", bytes.NewBuffer(reqBody))
+	url := fmt.Sprintf("%s/mcp/job/%s/logs", serviceURL, jobID)
+	resp, err := http.Get(url)
 	if err != nil {
 		return types.JobLogs{}, fmt.Errorf("failed to get logs: %w", err)
 	}
@@ -344,15 +334,10 @@ func getJobLogs(serviceURL, jobID string) (types.JobLogs, error) {
 	return logsResp.Logs, nil
 }
 
-// getJobStatus retrieves status and metrics for a job
+// getJobStatus retrieves status and metrics for a job using RESTful endpoint
 func getJobStatus(serviceURL, jobID string) (types.GetStatusResponse, error) {
-	statusReq := types.GetStatusRequest{JobID: jobID}
-	reqBody, err := json.Marshal(statusReq)
-	if err != nil {
-		return types.GetStatusResponse{}, fmt.Errorf("failed to marshal status request: %w", err)
-	}
-
-	resp, err := http.Post(serviceURL+"/mcp/getStatus", "application/json", bytes.NewBuffer(reqBody))
+	url := fmt.Sprintf("%s/mcp/job/%s/status", serviceURL, jobID)
+	resp, err := http.Get(url)
 	if err != nil {
 		return types.GetStatusResponse{}, fmt.Errorf("failed to get status: %w", err)
 	}

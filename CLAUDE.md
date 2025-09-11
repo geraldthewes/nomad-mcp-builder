@@ -173,8 +173,11 @@ curl -X POST http://${SERVICE_URL}/mcp/submitJob \
 nomad job status build-<job-id>
 nomad alloc logs -f <alloc-id>  # Follow build progress and check for errors
 
-# Check final status
-curl http://${SERVICE_URL}/mcp/getStatus -H "Content-Type: application/json" -d '{"jobID":"<job-id>"}'
+# Check final status (RESTful endpoint)
+curl http://${SERVICE_URL}/mcp/job/<job-id>/status
+
+# Get logs (RESTful endpoint)  
+curl http://${SERVICE_URL}/mcp/job/<job-id>/logs
 ```
 
 **Do not assume your changes work without testing them immediately!**
