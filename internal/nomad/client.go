@@ -368,10 +368,6 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 	}
 	
 	// Get test logs from all test jobs
-	nc.logger.WithFields(logrus.Fields{
-		"job_id": job.ID,
-		"test_job_ids": job.TestJobIDs,
-	}).Info("GetJobLogs: checking test job IDs")
 	
 	if len(job.TestJobIDs) > 0 {
 		var allTestLogs []string
@@ -390,7 +386,7 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 		logs.Test = allTestLogs
 	} else {
 		// Fallback: try to discover test jobs if TestJobIDs is empty
-		nc.logger.WithField("job_id", job.ID).Info("GetJobLogs: TestJobIDs empty, attempting discovery")
+		nc.logger.WithField("job_id", job.ID).Debug("GetJobLogs: TestJobIDs empty, attempting discovery")
 		discoveredTestJobs, err := nc.discoverTestJobs(job.ID)
 		if err != nil {
 			nc.logger.WithError(err).Warn("GetJobLogs: Failed to discover test jobs")
@@ -404,7 +400,7 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 			for i, testJobID := range discoveredTestJobs {
 				testLogs, err := nc.getJobLogs(testJobID)
 				if err != nil {
-					nc.logger.WithError(err).WithField("test_job_id", testJobID).Warn("Failed to get discovered test logs")
+					nc.logger.WithError(err).WithField("test_job_id", testJobID).Error("GetJobLogs: Failed to get discovered test logs")
 					allTestLogs = append(allTestLogs, fmt.Sprintf("Failed to get logs for test job %d (%s): %v", i, testJobID, err))
 				} else {
 					// Add header to distinguish between different test jobs
@@ -415,7 +411,7 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 			}
 			logs.Test = allTestLogs
 		} else {
-			nc.logger.WithField("job_id", job.ID).Info("GetJobLogs: No test jobs found via discovery")
+			nc.logger.WithField("job_id", job.ID).Debug("GetJobLogs: No test jobs found via discovery")
 		}
 	}
 	
