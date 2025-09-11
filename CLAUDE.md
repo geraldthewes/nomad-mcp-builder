@@ -6,18 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the Nomad Build Service, a lightweight, stateless MCP-based server written in Golang. The service enables coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure. It orchestrates builds, tests, and publishes using Buildah for daemonless image building.
 
-**Current Status:** This repository contains only a PRD (Product Requirements Document) - the actual implementation has not yet been created.
+**For complete project requirements and architecture details, see [PRD.md](PRD.md).**
 
-## Architecture (Planned)
+**Current Status:** Fully implemented and operational. The service provides a complete build-test-publish pipeline with improved Docker-native test execution.
 
-The system will consist of:
+## Architecture (Current Implementation)
+
+The system consists of:
 
 - **MCP Server**: Stateless Go application that translates MCP requests into Nomad API calls
 - **Nomad Jobs**: Three phases of ephemeral batch jobs:
-  1. Build phase: Uses Buildah to build Docker images from Git repos
-  2. Test phase: Runs test commands against the built image 
-  3. Publish phase: Pushes successful builds to Docker registries
+  1. **Build phase**: Uses Buildah to build Docker images from Git repos and push to temporary registry location
+  2. **Test phase**: Creates separate Nomad jobs using Docker driver directly to run the built image (no buildah complexity)
+  3. **Publish phase**: Uses Buildah to retag and push final images to target registries
 - **Build Caching**: Persistent host volume for Buildah layer caching at `/opt/nomad/data/buildah-cache`
+
+**Key Innovation**: Test phase now uses Nomad's native Docker driver instead of buildah commands, providing better isolation, cleaner logs, and parallel test execution capability.
 
 ## Key Technical Requirements
 

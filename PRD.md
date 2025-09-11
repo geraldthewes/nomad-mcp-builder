@@ -105,10 +105,13 @@ A build submission request from the agent could look like this:
 
 #### FR3: Test Phase
 
-* If the build succeeds, a separate Nomad batch job is spawned to run tests.  
-* The task uses the temporary image created in the build phase and executes each test command via `buildah run`.  
-* **Networking:** The job can be configured with standard Nomad networking (`bridge` mode) to allow the tests to access external services (e.g., databases, S3, other APIs).  
-* If any test command exits with a non-zero status code, the job is marked as failed, and the test logs (stdout/stderr) are captured.
+* If the build succeeds, separate Nomad batch jobs are spawned to run tests using the Docker driver directly.  
+* **Mode 1 - Custom Commands:** For each test command specified in `test_commands`, a separate Nomad job is created that runs the built image with Docker driver (`docker run <image> sh -c "<command>"`).
+* **Mode 2 - Entry Point Testing:** If `test_entry_point` is true, a Nomad job runs the built image directly without any command arguments, executing the image's default ENTRYPOINT/CMD.
+* **Architecture:** Tests run as native Docker containers in Nomad, not via buildah commands. This eliminates buildah complexity and leverages Nomad's native Docker driver capabilities.
+* **Networking:** Uses host networking mode to avoid CNI plugin requirements while still allowing network access for tests.
+* **Parallelization:** Multiple test commands can run in parallel as separate Nomad jobs, improving test execution time.
+* If any test job exits with a non-zero status code, the overall test phase is marked as failed, and all test logs are captured.
 
 #### FR4: Publish Phase
 
@@ -247,17 +250,54 @@ A build submission request from the agent could look like this:
 
 ## 5\. Architecture
 
-* **Components:**  
-  * **MCP Server:** A stateless Go application listening for agent requests. It acts as a control plane, translating MCP requests into Nomad API calls.  
-  * **Nomad Client:** Integrated into the Go application to communicate with the Nomad cluster API.  
-  * **Build/Test/Push Jobs:** Ephemeral Nomad batch jobs that execute the different phases using a Buildah task driver.  
-* **Data Flow:**  
-  1. Agent sends a `submitJob` request via MCP to the server.  
-  2. The server validates the request and submits a "build" job to the Nomad API.  
-  3. Upon successful completion of the build job, a "test" job is submitted.  
-  4. Upon successful completion of the test job, a "publish" job to the docker registry is submitted.  
-  5. The agent can poll for status or receive real-time updates and request logs for any phase at any time.  
-* **Job Atomicity:** The server orchestrates the sequence of jobs. If any job in the sequence fails, the orchestration stops, and the overall job ID is marked as `FAILED`.
+### 5.1 Components
+* **MCP Server:** A stateless Go application listening for agent requests. It acts as a control plane, translating MCP requests into Nomad API calls.  
+* **Nomad Client:** Integrated into the Go application to communicate with the Nomad cluster API.  
+* **Build/Test/Push Jobs:** Ephemeral Nomad batch jobs that execute the different phases.
+
+### 5.2 Phase Implementation Details
+
+#### Build Phase
+* **Technology:** Uses Buildah in `quay.io/buildah/stable` container
+* **Execution:** Single Nomad batch job that:
+  1. Clones Git repository using provided credentials
+  2. Builds Docker image using `buildah bud` with layer caching
+  3. Pushes temporary image to registry as `<registry>/temp/<job-id>:latest`
+* **Caching:** Mounts persistent volume `/opt/nomad/data/buildah-cache` for layer caching
+
+#### Test Phase (New Architecture)
+* **Technology:** Uses Nomad's native Docker driver directly
+* **Custom Commands Mode:** For each test command in `test_commands`:
+  * Creates separate Nomad batch job with Docker driver
+  * Job config: `{"image": "<temp-image>", "command": "sh", "args": ["-c", "<test-command>"]}`
+  * Runs test command inside the built image as a native Docker container
+* **Entry Point Mode:** If `test_entry_point` is true:
+  * Creates single Nomad batch job with Docker driver  
+  * Job config: `{"image": "<temp-image>"}` (no command - uses image's ENTRYPOINT/CMD)
+  * Tests the image's default execution behavior
+* **Benefits:**
+  * Eliminates buildah complexity in test phase
+  * Leverages Nomad's native Docker driver and log collection
+  * Supports parallel test execution (multiple test jobs can run simultaneously)
+  * Better resource isolation per test
+  * Cleaner, native log collection
+
+#### Publish Phase
+* **Technology:** Uses Buildah in `quay.io/buildah/stable` container
+* **Execution:** Single Nomad batch job that:
+  1. Pulls temporary image from registry
+  2. Retags image for each specified tag in `image_tags`
+  3. Pushes final images to target registry using `buildah push`
+
+### 5.3 Data Flow
+1. Agent sends a `submitJob` request via MCP to the server.  
+2. The server validates the request and submits a "build" job to the Nomad API.  
+3. Upon successful completion of the build job, multiple "test" jobs are submitted (one per test command or one for entry point testing).
+4. Upon successful completion of ALL test jobs, a "publish" job to the docker registry is submitted.  
+5. The agent can poll for status or receive real-time updates and request logs for any phase at any time.  
+
+### 5.4 Job Atomicity
+The server orchestrates the sequence of jobs. If any job in the sequence fails, the orchestration stops, and the overall job ID is marked as `FAILED`. The build-test-publish workflow is treated as a single atomic operation.
 
 ## 6\. Assumptions and Dependencies
 

@@ -1,0 +1,9 @@
+{
+  "job_id": "4ee8db9d-782c-4249-9b6a-1e49b64ca7c9",
+  "build_success": false,
+  "test_success": false,
+  "build_logs": null,
+  "test_logs": [],
+  "timestamp": "2025-09-07T10:10:44.26298272-04:00",
+  "duration": "20.29322334s"
+}

@@ -161,18 +161,57 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		}
 	}
 	
-	// Check test job status
-	if job.TestJobID != "" {
-		testStatus, err := nc.getJobStatus(job.TestJobID)
-		if err != nil {
-			return job, fmt.Errorf("failed to get test job status: %w", err)
+	// Check test job status (now supporting multiple test jobs)
+	if len(job.TestJobIDs) > 0 {
+		allComplete := true
+		anyRunning := false
+		anyFailed := false
+		var failedJobID string
+		
+		for _, testJobID := range job.TestJobIDs {
+			testStatus, err := nc.getJobStatus(testJobID)
+			if err != nil {
+				return job, fmt.Errorf("failed to get test job status for %s: %w", testJobID, err)
+			}
+			
+			switch testStatus {
+			case "running":
+				anyRunning = true
+				allComplete = false
+			case "complete":
+				// This test job completed successfully
+				continue
+			case "failed":
+				anyFailed = true
+				allComplete = false
+				failedJobID = testJobID
+			default:
+				allComplete = false
+			}
 		}
 		
-		switch testStatus {
-		case "running":
+		// Update job status based on test job states
+		if anyRunning {
 			job.Status = types.StatusTesting
-		case "complete":
-			// Tests completed, capture logs before they disappear
+		} else if anyFailed {
+			// If any test failed, capture logs from all test jobs before they disappear
+			if err := nc.capturePhaseLogs(job, "test"); err != nil {
+				nc.logger.WithError(err).Warn("Failed to capture failed test logs")
+			}
+			
+			job.Status = types.StatusFailed
+			job.FailedPhase = "test"
+			// Get detailed error information from the failed job
+			errorMsg, err := nc.getJobErrorDetails(failedJobID)
+			if err != nil {
+				job.Error = fmt.Sprintf("Test phase failed - job %s failed but unable to get error details", failedJobID)
+			} else {
+				job.Error = fmt.Sprintf("Test phase failed in job %s: %s", failedJobID, errorMsg)
+			}
+			now := time.Now()
+			job.FinishedAt = &now
+		} else if allComplete {
+			// All tests completed successfully, capture logs before they disappear
 			if err := nc.capturePhaseLogs(job, "test"); err != nil {
 				nc.logger.WithError(err).Warn("Failed to capture test logs")
 			}
@@ -188,23 +227,6 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 					job.Status = types.StatusPublishing
 				}
 			}
-		case "failed":
-			// Capture logs from failed test before they disappear
-			if err := nc.capturePhaseLogs(job, "test"); err != nil {
-				nc.logger.WithError(err).Warn("Failed to capture failed test logs")
-			}
-			
-			job.Status = types.StatusFailed
-			job.FailedPhase = "test"
-			// Get detailed error information
-			errorMsg, err := nc.getJobErrorDetails(job.TestJobID)
-			if err != nil {
-				job.Error = "Test phase failed - unable to get error details"
-			} else {
-				job.Error = fmt.Sprintf("Test phase failed: %s", errorMsg)
-			}
-			now := time.Now()
-			job.FinishedAt = &now
 		}
 	}
 	
@@ -269,14 +291,22 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 		}
 	}
 	
-	// Get test logs
-	if job.TestJobID != "" {
-		testLogs, err := nc.getJobLogs(job.TestJobID)
-		if err != nil {
-			nc.logger.WithError(err).Warn("Failed to get test logs")
-		} else {
-			logs.Test = testLogs
+	// Get test logs from all test jobs
+	if len(job.TestJobIDs) > 0 {
+		var allTestLogs []string
+		for i, testJobID := range job.TestJobIDs {
+			testLogs, err := nc.getJobLogs(testJobID)
+			if err != nil {
+				nc.logger.WithError(err).WithField("test_job_id", testJobID).Warn("Failed to get test logs")
+				allTestLogs = append(allTestLogs, fmt.Sprintf("Failed to get logs for test job %d (%s): %v", i, testJobID, err))
+			} else {
+				// Add header to distinguish between different test jobs
+				allTestLogs = append(allTestLogs, fmt.Sprintf("=== Test Job %d (%s) ===", i, testJobID))
+				allTestLogs = append(allTestLogs, testLogs...)
+				allTestLogs = append(allTestLogs, "") // Empty line for separation
+			}
 		}
+		logs.Test = allTestLogs
 	}
 	
 	// Get publish logs
@@ -303,10 +333,10 @@ func (nc *Client) KillJob(job *types.Job) error {
 		}
 	}
 	
-	// Kill test job if running
-	if job.TestJobID != "" {
-		if _, _, err := nc.client.Jobs().Deregister(job.TestJobID, true, nil); err != nil {
-			errors = append(errors, fmt.Sprintf("test: %v", err))
+	// Kill test jobs if running
+	for _, testJobID := range job.TestJobIDs {
+		if _, _, err := nc.client.Jobs().Deregister(testJobID, true, nil); err != nil {
+			errors = append(errors, fmt.Sprintf("test job %s: %v", testJobID, err))
 		}
 	}
 	
@@ -355,13 +385,13 @@ func (nc *Client) CleanupFailedJobs(job *types.Job) error {
 		}
 	}
 	
-	// Clean up test job if it's dead/failed
-	if job.TestJobID != "" {
-		if status, err := nc.getJobStatus(job.TestJobID); err == nil && (status == "failed" || status == "dead") {
-			if _, _, err := nc.client.Jobs().Deregister(job.TestJobID, true, &nomadapi.WriteOptions{}); err != nil {
-				errors = append(errors, fmt.Sprintf("test job cleanup: %v", err))
+	// Clean up test jobs if they're dead/failed
+	for _, testJobID := range job.TestJobIDs {
+		if status, err := nc.getJobStatus(testJobID); err == nil && (status == "failed" || status == "dead") {
+			if _, _, err := nc.client.Jobs().Deregister(testJobID, true, &nomadapi.WriteOptions{}); err != nil {
+				errors = append(errors, fmt.Sprintf("test job %s cleanup: %v", testJobID, err))
 			} else {
-				nc.logger.WithField("job_id", job.TestJobID).Info("Cleaned up failed test job from Nomad")
+				nc.logger.WithField("job_id", testJobID).Info("Cleaned up failed test job from Nomad")
 			}
 		}
 	}
@@ -657,13 +687,16 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 		return nc.startPublishPhase(job)
 	}
 	
-	testJobSpec, err := nc.createTestJobSpec(job)
+	testJobSpecs, err := nc.createTestJobSpecs(job)
 	if err != nil {
-		return fmt.Errorf("failed to create test job spec: %w", err)
+		return fmt.Errorf("failed to create test job specs: %w", err)
 	}
 	
-	// Log the job specification for debugging
-	nc.logJobSpec(testJobSpec, "test")
+	if len(testJobSpecs) == 0 {
+		// No test jobs to run, skip to publish phase
+		nc.logger.WithField("job_id", job.ID).Info("No test jobs created, skipping test phase")
+		return nc.startPublishPhase(job)
+	}
 	
 	// Use proper WriteOptions and RegisterOpts to match CLI behavior
 	registerOpts := &nomadapi.RegisterOptions{
@@ -675,26 +708,42 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 		Namespace: nc.config.Nomad.Namespace,
 	}
 	
-	evalID, _, err := nc.client.Jobs().RegisterOpts(testJobSpec, registerOpts, writeOpts)
-	if err != nil {
-		// Check for specific Vault template errors and provide better feedback
-		errorMsg := err.Error()
-		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
-			return fmt.Errorf("vault template error in test job: empty or invalid secret path provided. Please check that RegistryCredentialsPath is a valid Vault path or leave it empty if not needed. Original error: %w", err)
+	// Submit all test jobs
+	var testJobIDs []string
+	for i, testJobSpec := range testJobSpecs {
+		// Log the job specification for debugging
+		nc.logJobSpec(testJobSpec, fmt.Sprintf("test-%d", i))
+		
+		evalID, _, err := nc.client.Jobs().RegisterOpts(testJobSpec, registerOpts, writeOpts)
+		if err != nil {
+			// Check for specific Vault template errors and provide better feedback
+			errorMsg := err.Error()
+			if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
+				return fmt.Errorf("vault template error in test job %s: empty or invalid secret path provided. Please check that RegistryCredentialsPath is a valid Vault path or leave it empty if not needed. Original error: %w", *testJobSpec.ID, err)
+			}
+			if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read") {
+				return fmt.Errorf("vault template error in test job %s: failed to read secret from Vault. Please verify the secret path exists and the service has proper permissions. Original error: %w", *testJobSpec.ID, err)
+			}
+			return fmt.Errorf("failed to submit test job %s to Nomad: %w", *testJobSpec.ID, err)
 		}
-		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read") {
-			return fmt.Errorf("vault template error in test job: failed to read secret from Vault. Please verify the secret path exists and the service has proper permissions. Original error: %w", err)
-		}
-		return fmt.Errorf("failed to submit test job to Nomad: %w", err)
+		
+		testJobIDs = append(testJobIDs, *testJobSpec.ID)
+		
+		nc.logger.WithFields(logrus.Fields{
+			"job_id":      job.ID,
+			"nomad_job":   *testJobSpec.ID,
+			"eval_id":     evalID,
+			"test_index":  i,
+		}).Info("Test job submitted to Nomad")
 	}
 	
-	job.TestJobID = *testJobSpec.ID
+	job.TestJobIDs = testJobIDs
 	
 	nc.logger.WithFields(logrus.Fields{
-		"job_id":      job.ID,
-		"nomad_job":   *testJobSpec.ID,
-		"eval_id":     evalID,
-	}).Info("Test job submitted to Nomad")
+		"job_id":       job.ID,
+		"test_jobs":    len(testJobIDs),
+		"test_job_ids": testJobIDs,
+	}).Info("All test jobs submitted to Nomad")
 	
 	return nil
 }
@@ -1005,44 +1054,77 @@ func (nc *Client) JobSpecToHCL(jobSpec *nomadapi.Job) (string, error) {
 
 // capturePhaseLogs captures logs from a completed phase and stores them persistently
 func (nc *Client) capturePhaseLogs(job *types.Job, phase string) error {
-	var jobID string
-	
 	switch phase {
 	case "build":
-		jobID = job.BuildJobID
+		if job.BuildJobID == "" {
+			return nil // No job to capture logs from
+		}
+		
+		logs, err := nc.getJobLogs(job.BuildJobID)
+		if err != nil {
+			return fmt.Errorf("failed to get logs for build phase: %w", err)
+		}
+		
+		job.Logs.Build = logs
+		
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": job.ID,
+			"phase":  phase,
+			"log_lines": len(logs),
+		}).Info("Captured build phase logs")
+		
 	case "test":
-		jobID = job.TestJobID
+		if len(job.TestJobIDs) == 0 {
+			return nil // No jobs to capture logs from
+		}
+		
+		var allTestLogs []string
+		totalLogLines := 0
+		
+		for i, testJobID := range job.TestJobIDs {
+			logs, err := nc.getJobLogs(testJobID)
+			if err != nil {
+				nc.logger.WithError(err).WithField("test_job_id", testJobID).Warn("Failed to capture logs for test job")
+				allTestLogs = append(allTestLogs, fmt.Sprintf("Failed to get logs for test job %d (%s): %v", i, testJobID, err))
+			} else {
+				// Add header to distinguish between different test jobs
+				allTestLogs = append(allTestLogs, fmt.Sprintf("=== Test Job %d (%s) ===", i, testJobID))
+				allTestLogs = append(allTestLogs, logs...)
+				allTestLogs = append(allTestLogs, "") // Empty line for separation
+				totalLogLines += len(logs)
+			}
+		}
+		
+		job.Logs.Test = allTestLogs
+		
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": job.ID,
+			"phase":  phase,
+			"test_jobs": len(job.TestJobIDs),
+			"log_lines": totalLogLines,
+		}).Info("Captured test phase logs")
+		
 	case "publish":
-		jobID = job.PublishJobID
+		if job.PublishJobID == "" {
+			return nil // No job to capture logs from
+		}
+		
+		logs, err := nc.getJobLogs(job.PublishJobID)
+		if err != nil {
+			return fmt.Errorf("failed to get logs for publish phase: %w", err)
+		}
+		
+		job.Logs.Publish = logs
+		
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": job.ID,
+			"phase":  phase,
+			"log_lines": len(logs),
+		}).Info("Captured publish phase logs")
+		
 	default:
 		return fmt.Errorf("unknown phase: %s", phase)
 	}
-	
-	if jobID == "" {
-		return nil // No job to capture logs from
-	}
-	
-	// Get logs from the completed job
-	logs, err := nc.getJobLogs(jobID)
-	if err != nil {
-		return fmt.Errorf("failed to get logs for %s phase: %w", phase, err)
-	}
-	
-	// Store logs in the job structure based on phase
-	switch phase {
-	case "build":
-		job.Logs.Build = logs
-	case "test":
-		job.Logs.Test = logs
-	case "publish":
-		job.Logs.Publish = logs
-	}
-	
-	nc.logger.WithFields(logrus.Fields{
-		"job_id": job.ID,
-		"phase":  phase,
-		"log_lines": len(logs),
-	}).Info("Captured phase logs")
 	
 	return nil
 }

@@ -1,0 +1,10 @@
+[main/stdout] 61d3f639499e5286b615bf2fc9e271c1f88ce5661b72a10a41313c49c24b63b5
+[main/stdout] Running image entry point...
+[main/stderr] Trying to pull registry.cluster:5000/bdtemp/e4a579ac-c365-468e-994d-86a90a1d7b53:latest...
+[main/stderr] Getting image source signatures
+[main/stderr] Copying blob sha256:d8f467a2c97c2b07b969aa73ec3789209f0230b1a50013544835840e1ca6d9b8
+[main/stderr] Copying blob sha256:df603300ccbcc1523bc2760b1bd7133a04e098190156de2f216bc808a68a73a9
+[main/stderr] Copying blob sha256:57339e25372f00c9a062a9db7de87a2ae2203260900010077e6b31d4d3351faf
+[main/stderr] Copying config sha256:61d3f639499e5286b615bf2fc9e271c1f88ce5661b72a10a41313c49c24b63b5
+[main/stderr] Writing manifest to image destination
+[main/stderr] Error: command must be specified

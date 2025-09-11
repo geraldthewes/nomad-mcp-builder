@@ -1,0 +1,10 @@
+{
+  "job_id": "433c7263-acf4-4e13-9768-120a263d2228",
+  "build_success": false,
+  "test_success": false,
+  "build_logs": null,
+  "test_logs": null,
+  "error": "Job monitoring failed: job monitoring timed out after 10m0s",
+  "timestamp": "2025-09-10T21:23:40.995228778-04:00",
+  "duration": ""
+}

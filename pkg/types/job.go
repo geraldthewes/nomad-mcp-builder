@@ -49,9 +49,9 @@ type Job struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	
 	// Nomad job IDs for each phase
-	BuildJobID   string `json:"build_job_id,omitempty"`
-	TestJobID    string `json:"test_job_id,omitempty"`
-	PublishJobID string `json:"publish_job_id,omitempty"`
+	BuildJobID   string   `json:"build_job_id,omitempty"`
+	TestJobIDs   []string `json:"test_job_ids,omitempty"`  // Multiple test jobs
+	PublishJobID string   `json:"publish_job_id,omitempty"`
 	
 	// Logs for each phase
 	Logs JobLogs `json:"logs"`

@@ -157,14 +157,14 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	return jobSpec, nil
 }
 
-// createTestJobSpec creates a Nomad job specification for the test phase
-func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
-	jobID := fmt.Sprintf("test-%s", job.ID)
+// createTestJobSpecs creates Nomad job specifications for the test phase using Docker driver directly
+func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
+	var testJobs []*nomadapi.Job
 	
-	// Resource limits (similar to build phase)
-	cpu := 1000
-	memory := 2048
-	disk := 5120 // Tests typically need less disk
+	// Resource limits for test jobs
+	cpu := 500    // Less than build phase since tests are simpler
+	memory := 1024
+	disk := 2048  // Tests need minimal disk
 	
 	if job.Config.ResourceLimits != nil {
 		if job.Config.ResourceLimits.CPU != "" {
@@ -175,149 +175,158 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		}
 	}
 	
-	// Create temporary image name
+	// Create temporary image name - this is the image built in the build phase
 	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
 		nc.config.Build.RegistryConfig.URL, 
 		nc.config.Build.RegistryConfig.TempPrefix, 
 		job.ID)
 	
-	// Determine test mode and build appropriate commands
-	var testCommands []string
-	
+	// Mode 1: Create separate test jobs for each custom test command
 	if len(job.Config.TestCommands) > 0 {
-		// Mode 1: Execute custom test commands inside the image
-		testCommands = []string{
-			"#!/bin/bash",
-			"set -euo pipefail",
-			"",
-			"# Pull the built image",
-			fmt.Sprintf("buildah pull docker://%s", tempImageName),
-			"",
-			"# Run each test command inside the container",
-		}
-		
 		for i, testCmd := range job.Config.TestCommands {
-			testCommands = append(testCommands, 
-				fmt.Sprintf("echo 'Running test %d: %s'", i+1, testCmd),
-				fmt.Sprintf("buildah run %s -- %s", tempImageName, testCmd),
-				"echo 'Test completed successfully'",
-				"",
-			)
+			jobID := fmt.Sprintf("test-cmd-%s-%d", job.ID, i)
+			
+			testJobSpec := &nomadapi.Job{
+				ID:          &jobID,
+				Name:        &jobID,
+				Type:        stringPtr("batch"),
+				Namespace:   stringPtr(nc.config.Nomad.Namespace),
+				Region:      stringPtr(nc.config.Nomad.Region),
+				Datacenters: nc.config.Nomad.Datacenters,
+				Meta: map[string]string{
+					"build-service-job-id": job.ID,
+					"phase":                "test",
+					"test-type":            "command",
+					"test-index":           fmt.Sprintf("%d", i),
+					"test-command":         testCmd,
+				},
+				TaskGroups: []*nomadapi.TaskGroup{
+					{
+						Name:        stringPtr("test"),
+						Count:       intPtr(1),
+						Constraints: []*nomadapi.Constraint{}, // No constraints needed
+						RestartPolicy: &nomadapi.RestartPolicy{
+							Attempts: intPtr(0), // No retries for test failures
+						},
+						Tasks: []*nomadapi.Task{
+							{
+								Name:   "main",
+								Driver: "docker",
+								Config: map[string]interface{}{
+									"image":   tempImageName,  // Use the built image directly
+									"command": "sh",
+									"args":    []string{"-c", testCmd},
+									// Add registry certificates for private registries
+									"volumes": []string{
+										"/etc/docker/certs.d:/etc/docker/certs.d:ro",
+									},
+								},
+								Resources: &nomadapi.Resources{
+									CPU:      intPtr(cpu),
+									MemoryMB: intPtr(memory),
+									DiskMB:   intPtr(disk),
+								},
+								KillTimeout: &nc.config.Build.KillTimeout,
+							},
+						},
+						EphemeralDisk: &nomadapi.EphemeralDisk{
+							SizeMB: intPtr(disk),
+						},
+					},
+				},
+			}
+			
+			// Add registry credentials if needed for private registries
+			if job.Config.RegistryCredentialsPath != "" {
+				templates := testTemplates(job)
+				if len(templates) > 0 {
+					mainTask := testJobSpec.TaskGroups[0].Tasks[0]
+					mainTask.Vault = &nomadapi.Vault{
+						Policies:   []string{"nomad-build-service"},
+						ChangeMode: stringPtr("restart"),
+						Role:       "nomad-workloads",
+					}
+					mainTask.Templates = templates
+				}
+			}
+			
+			testJobs = append(testJobs, testJobSpec)
 		}
-		testCommands = append(testCommands, "echo 'All custom tests completed successfully'")
-		
-	} else if job.Config.TestEntryPoint {
-		// Mode 2: Execute the image's entry point/CMD
-		testCommands = []string{
-			"#!/bin/bash",
-			"set -euo pipefail",
-			"",
-			"# Pull the built image",
-			fmt.Sprintf("buildah pull docker://%s", tempImageName),
-			"",
-			"# Execute the image's default entry point/CMD using podman",
-			"echo 'Running image entry point...'",
-			fmt.Sprintf("podman run --rm %s", tempImageName), // Run the image with its default CMD/ENTRYPOINT
-			"echo 'Entry point execution completed successfully'",
-		}
-		
-	} else {
-		// This case should not occur since startTestPhase now checks for this condition
-		// and skips the test phase entirely, but we'll handle it gracefully
-		return nil, fmt.Errorf("internal error: test job created with no test configuration")
 	}
 	
-	jobSpec := &nomadapi.Job{
-		ID:          &jobID,
-		Name:        &jobID,
-		Type:        stringPtr("batch"),
-		Namespace:   stringPtr(nc.config.Nomad.Namespace),
-		Region:      stringPtr(nc.config.Nomad.Region),
-		Datacenters: nc.config.Nomad.Datacenters,
-		Meta: map[string]string{
-			"build-service-job-id": job.ID,
-			"phase":                "test",
-		},
-		TaskGroups: []*nomadapi.TaskGroup{
-			{
-				Name:        stringPtr("test"),
-				Count:       intPtr(1),
-				Constraints: []*nomadapi.Constraint{}, // Override automatic constraints
-				RestartPolicy: &nomadapi.RestartPolicy{
-					Attempts: intPtr(0),
-				},
-				Networks: []*nomadapi.NetworkResource{
-					{
-						Mode: "host", // Use host networking to avoid CNI plugin constraints
+	// Mode 2: Create a test job that runs the image's entry point/CMD
+	if job.Config.TestEntryPoint {
+		jobID := fmt.Sprintf("test-entry-%s", job.ID)
+		
+		testJobSpec := &nomadapi.Job{
+			ID:          &jobID,
+			Name:        &jobID,
+			Type:        stringPtr("batch"),
+			Namespace:   stringPtr(nc.config.Nomad.Namespace),
+			Region:      stringPtr(nc.config.Nomad.Region),
+			Datacenters: nc.config.Nomad.Datacenters,
+			Meta: map[string]string{
+				"build-service-job-id": job.ID,
+				"phase":                "test",
+				"test-type":            "entrypoint",
+			},
+			TaskGroups: []*nomadapi.TaskGroup{
+				{
+					Name:        stringPtr("test"),
+					Count:       intPtr(1),
+					Constraints: []*nomadapi.Constraint{}, // No constraints needed
+					RestartPolicy: &nomadapi.RestartPolicy{
+						Attempts: intPtr(0), // No retries for test failures
 					},
-				},
-				Tasks: []*nomadapi.Task{
-					{
-						Name:   "main",
-						Driver: "docker",
-						Config: map[string]interface{}{
-							"image":   "quay.io/buildah/stable:latest",
-							"command": "/bin/bash",
-							"args":    []string{"-c", strings.Join(testCommands, "\n")},
-							// Add capabilities required for Buildah user namespaces
-							"cap_add": []string{
-								"SYS_ADMIN",     // Required for mount operations
-								"SETUID",        // Required for user namespace operations
-								"SETGID",        // Required for user namespace operations
-								"SYS_CHROOT",    // Required for chroot operations
+					Tasks: []*nomadapi.Task{
+						{
+							Name:   "main",
+							Driver: "docker",
+							Config: map[string]interface{}{
+								"image": tempImageName, // Use the built image directly - no command/args means use ENTRYPOINT/CMD
+								// Add registry certificates for private registries
+								"volumes": []string{
+									"/etc/docker/certs.d:/etc/docker/certs.d:ro",
+								},
 							},
-							// Enable user namespace mapping
-							"userns_mode": "host",
-							// Add security options for user namespace
-							"security_opt": []string{
-								"seccomp=unconfined",
-								"apparmor=unconfined",
+							Resources: &nomadapi.Resources{
+								CPU:      intPtr(cpu),
+								MemoryMB: intPtr(memory),
+								DiskMB:   intPtr(disk),
 							},
-							// Mount cgroup filesystem for container management
-							"volumes": []string{
-								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
-								"/tmp:/tmp:rw",  // Ensure tmp is writable
-								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates
-							},
-							// Removed /dev/fuse device to avoid version constraints
+							KillTimeout: &nc.config.Build.KillTimeout,
 						},
-						Env: map[string]string{
-							"BUILDAH_ISOLATION": "chroot",  // Use chroot isolation to avoid cgroup issues
-							"STORAGE_DRIVER":    "vfs",     // Use VFS storage driver for better compatibility
-							"BUILDAH_FORMAT":    "oci",     // Ensure OCI format
-							"BUILDAH_LAYERS":    "false",   // Disable layer caching to simplify
-							"_BUILDAH_STARTED_IN_USERNS": "1", // Tell buildah we're in a user namespace
-							"BUILDAH_ROOTLESS":  "1",       // Enable rootless mode
-							// Remove cgroup manager to avoid delegation issues
-						},
-						Resources: &nomadapi.Resources{
-							CPU:      intPtr(cpu),
-							MemoryMB: intPtr(memory),
-							DiskMB:   intPtr(disk),
-						},
-						KillTimeout: &nc.config.Build.KillTimeout,
 					},
-				},
-				EphemeralDisk: &nomadapi.EphemeralDisk{
-					SizeMB: intPtr(disk),
+					EphemeralDisk: &nomadapi.EphemeralDisk{
+						SizeMB: intPtr(disk),
+					},
 				},
 			},
-		},
-	}
-	
-	// Add Vault integration and templates only if needed
-	templates := testTemplates(job)
-	if len(templates) > 0 {
-		mainTask := jobSpec.TaskGroups[0].Tasks[0]
-		mainTask.Vault = &nomadapi.Vault{
-			Policies:   []string{"nomad-build-service"},
-			ChangeMode: stringPtr("restart"),
-			Role:       "nomad-workloads",
 		}
-		mainTask.Templates = templates
+		
+		// Add registry credentials if needed for private registries
+		if job.Config.RegistryCredentialsPath != "" {
+			templates := testTemplates(job)
+			if len(templates) > 0 {
+				mainTask := testJobSpec.TaskGroups[0].Tasks[0]
+				mainTask.Vault = &nomadapi.Vault{
+					Policies:   []string{"nomad-build-service"},
+					ChangeMode: stringPtr("restart"),
+					Role:       "nomad-workloads",
+				}
+				mainTask.Templates = templates
+			}
+		}
+		
+		testJobs = append(testJobs, testJobSpec)
 	}
 	
-	return jobSpec, nil
+	// If no test configuration, return empty array (caller will skip test phase)
+	if len(testJobs) == 0 {
+		return []*nomadapi.Job{}, nil
+	}
+	
+	return testJobs, nil
 }
 
 // createPublishJobSpec creates a Nomad job specification for the publish phase

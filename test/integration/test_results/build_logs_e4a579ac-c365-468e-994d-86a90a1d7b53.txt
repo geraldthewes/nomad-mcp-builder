@@ -1,0 +1,30 @@
+[main/stdout] Your branch is up to date with 'origin/main'.
+[main/stdout] STEP 1/4: FROM alpine:latest
+[main/stdout] STEP 2/4: RUN echo -e '#!/bin/sh\necho "Hello World"' > /hello.sh
+[main/stdout] --> Using cache 19343a91e9a00753383586e63a6b23dba687cba3d23daf9e004fe36c49e258f5
+[main/stdout] --> 19343a91e9a0
+[main/stdout] STEP 3/4: RUN chmod +x /hello.sh
+[main/stdout] --> Using cache e22bfcfc348445657022fc81d38677f37b84353968283e83384ed50bf62aafcb
+[main/stdout] --> e22bfcfc3484
+[main/stdout] STEP 4/4: ENTRYPOINT ["/hello.sh"]
+[main/stdout] --> Using cache 61d3f639499e5286b615bf2fc9e271c1f88ce5661b72a10a41313c49c24b63b5
+[main/stdout] COMMIT registry.cluster:5000/bdtemp/e4a579ac-c365-468e-994d-86a90a1d7b53:latest
+[main/stdout] --> 61d3f639499e
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/e4a579ac-c365-468e-994d-86a90a1d7b53:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/12292747-6f08-48e1-a23f-00daa42135b7:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/e42be74d-4e72-4932-b463-1c41c8ba7e80:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/b233d96d-ab15-4bb8-a4f7-964e5f558014:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/433c7263-acf4-4e13-9768-120a263d2228:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/4ee8db9d-782c-4249-9b6a-1e49b64ca7c9:latest
+[main/stdout] Successfully tagged registry.cluster:5000/bdtemp/6afdb93a-e0bd-4686-83d3-fb58fc445b97:latest
+[main/stdout] 61d3f639499e5286b615bf2fc9e271c1f88ce5661b72a10a41313c49c24b63b5
+[main/stdout] No registry credentials file, attempting anonymous push...
+[main/stdout] Build completed successfully
+[main/stderr] Cloning into '/tmp/repo'...
+[main/stderr] Already on 'main'
+[main/stderr] Getting image source signatures
+[main/stderr] Copying blob sha256:4a61f8d8f31aff79def0085fd59480ed191a28b0e2faf7cba76db118f07e2a71
+[main/stderr] Copying blob sha256:9d794a5fb89d480087865dbe42a8dce4136f19ea68cf97bf113b0dff088eb5f5
+[main/stderr] Copying blob sha256:418dccb7d85a63a6aa574439840f7a6fa6fd2321b3e2394568a317735e867d35
+[main/stderr] Copying config sha256:61d3f639499e5286b615bf2fc9e271c1f88ce5661b72a10a41313c49c24b63b5
+[main/stderr] Writing manifest to image destination
