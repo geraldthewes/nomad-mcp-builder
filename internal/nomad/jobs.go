@@ -215,9 +215,9 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 			"# Pull the built image",
 			fmt.Sprintf("buildah pull docker://%s", tempImageName),
 			"",
-			"# Execute the image's default entry point/CMD",
+			"# Execute the image's default entry point/CMD using podman",
 			"echo 'Running image entry point...'",
-			fmt.Sprintf("buildah run %s", tempImageName), // No -- command, uses image's CMD/ENTRYPOINT
+			fmt.Sprintf("podman run --rm %s", tempImageName), // Run the image with its default CMD/ENTRYPOINT
 			"echo 'Entry point execution completed successfully'",
 		}
 		
@@ -248,7 +248,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 				},
 				Networks: []*nomadapi.NetworkResource{
 					{
-						Mode: "bridge", // Enable networking for tests
+						Mode: "host", // Use host networking to avoid CNI plugin constraints
 					},
 				},
 				Tasks: []*nomadapi.Task{
@@ -277,6 +277,7 @@ func (nc *Client) createTestJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"volumes": []string{
 								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
 								"/tmp:/tmp:rw",  // Ensure tmp is writable
+								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates
 							},
 							// Removed /dev/fuse device to avoid version constraints
 						},
@@ -402,6 +403,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"volumes": []string{
 								"/sys/fs/cgroup:/sys/fs/cgroup:rw",
 								"/tmp:/tmp:rw",  // Ensure tmp is writable
+								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates
 							},
 							// Removed /dev/fuse device to avoid version constraints
 						},
