@@ -148,18 +148,20 @@ nomad alloc status <alloc-id>         # Look for "Allocation Addresses" section
 Use this exact test command with the discovered URL:
 
 ```bash
-# Replace <SERVICE_URL> with the URL from Step 1
-curl -X POST http://<SERVICE_URL>/mcp/submitJob \
+# Replace <SERVICE_URL> with the URL from Step 1, or use environment variable
+SERVICE_URL=${SERVICE_URL:-$(curl -s http://${CONSUL_HTTP_ADDR:-10.0.1.12:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')}
+
+curl -X POST http://${SERVICE_URL}/mcp/submitJob \
   -H "Content-Type: application/json" \
   -d '{
-    "jobConfig": {
-      "owner": "claude-test",
-      "repoURL": "https://github.com/geraldthewes/bd",
-      "gitRef": "main", 
-      "dockerfilePath": "Dockerfile",
-      "imageTags": ["test"],
-      "registryURL": "registry.cluster:5000/bdtemp",
-      "testCommands": ["echo test"]
+    "job_config": {
+      "owner": "test",
+      "repo_url": "https://github.com/geraldthewes/docker-build-hello-world.git",
+      "git_ref": "main",
+      "dockerfile_path": "Dockerfile",
+      "image_tags": ["hello-world-test"],
+      "registry_url": "registry.cluster:5000/helloworld",
+      "test_entry_point": true
     }
   }'
 ```
@@ -172,7 +174,7 @@ nomad job status build-<job-id>
 nomad alloc logs -f <alloc-id>  # Follow build progress and check for errors
 
 # Check final status
-curl http://<SERVICE_URL>/mcp/getStatus -H "Content-Type: application/json" -d '{"jobID":"<job-id>"}'
+curl http://${SERVICE_URL}/mcp/getStatus -H "Content-Type: application/json" -d '{"jobID":"<job-id>"}'
 ```
 
 **Do not assume your changes work without testing them immediately!**

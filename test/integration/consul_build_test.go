@@ -21,14 +21,14 @@ import (
 
 // TestResult represents the result of a build and test
 type TestResult struct {
-	JobID        string    `json:"job_id"`
-	BuildSuccess bool      `json:"build_success"`
-	TestSuccess  bool      `json:"test_success"`
-	BuildLogs    []string  `json:"build_logs"`
-	TestLogs     []string  `json:"test_logs"`
-	Error        string    `json:"error,omitempty"`
-	Timestamp    time.Time `json:"timestamp"`
-	Duration     string    `json:"duration"`
+	JobID        string            `json:"job_id"`
+	BuildSuccess bool              `json:"build_success"`
+	TestSuccess  bool              `json:"test_success"`
+	BuildLogs    []string          `json:"build_logs"`
+	TestLogs     []string          `json:"test_logs"`
+	Error        string            `json:"error,omitempty"`
+	Timestamp    map[string]string `json:"timestamp"`
+	Duration     map[string]string `json:"duration"`
 }
 
 // TestBuildWorkflow tests the complete build workflow with service discovery
@@ -40,8 +40,10 @@ func TestBuildWorkflow(t *testing.T) {
 
 	startTime := time.Now()
 	result := TestResult{
-		Timestamp: startTime,
+		Timestamp: make(map[string]string),
+		Duration:  make(map[string]string),
 	}
+	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
 
 	// Step 1: Discover service URL via Consul
 	t.Log("Discovering nomad-build-service via Consul...")
@@ -85,7 +87,7 @@ func TestBuildWorkflow(t *testing.T) {
 	}
 	t.Logf("Job completed with status: %s", finalStatus)
 
-	// Step 4: Retrieve logs (always try to get logs, especially on failure)
+	// Step 4: Retrieve logs and metrics (always try to get them, especially on failure)
 	t.Log("Retrieving job logs...")
 	logs, err := getJobLogs(serviceURL, jobID)
 	if err != nil {
@@ -96,36 +98,89 @@ func TestBuildWorkflow(t *testing.T) {
 		// Store logs in result
 		result.BuildLogs = logs.Build
 		result.TestLogs = logs.Test
+	}
+	
+	// Get job status for metrics
+	t.Log("Retrieving job metrics...")
+	status, err := getJobStatus(serviceURL, jobID)
+	var metrics *types.JobMetrics
+	if err != nil {
+		t.Logf("Warning: Failed to retrieve metrics via API: %v", err)
+	} else {
+		metrics = &status.Metrics
+	}
 		
-		// If job failed, print the logs to help with debugging
-		if finalStatus == types.StatusFailed {
-			t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
-			
-			if len(result.BuildLogs) > 0 {
-				t.Log("=== BUILD LOGS ===")
-				for _, line := range result.BuildLogs {
-					t.Logf("BUILD: %s", line)
-				}
-			} else {
-				t.Log("No build logs available from service API")
+	// If job failed, print the logs to help with debugging
+	if finalStatus == types.StatusFailed {
+		t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
+		
+		if len(result.BuildLogs) > 0 {
+			t.Log("=== BUILD LOGS ===")
+			for _, line := range result.BuildLogs {
+				t.Logf("BUILD: %s", line)
 			}
-			
-			if len(result.TestLogs) > 0 {
-				t.Log("=== TEST LOGS ===")
-				for _, line := range result.TestLogs {
-					t.Logf("TEST: %s", line)
-				}
-			} else {
-				t.Log("No test logs available from service API")
-			}
-			t.Log("=== END FAILURE LOGS ===")
+		} else {
+			t.Log("No build logs available from service API")
 		}
+		
+		if len(result.TestLogs) > 0 {
+			t.Log("=== TEST LOGS ===")
+			for _, line := range result.TestLogs {
+				t.Logf("TEST: %s", line)
+			}
+		} else {
+			t.Log("No test logs available from service API")
+		}
+		t.Log("=== END FAILURE LOGS ===")
 	}
 
-	// Step 5: Determine success/failure
+	// Step 5: Determine success/failure and calculate durations
+	endTime := time.Now()
 	result.BuildSuccess = len(result.BuildLogs) > 0 && finalStatus != types.StatusFailed
 	result.TestSuccess = len(result.TestLogs) > 0 && finalStatus == types.StatusSucceeded
-	result.Duration = time.Since(startTime).String()
+	result.Timestamp["job_end"] = endTime.UTC().Format(time.RFC3339)
+	result.Duration["total"] = time.Since(startTime).String()
+	
+	// Get detailed timing from job metrics if available
+	if metrics != nil {
+		if metrics.JobStart != nil {
+			result.Timestamp["job_start"] = metrics.JobStart.Format(time.RFC3339)
+		}
+		if metrics.BuildStart != nil {
+			result.Timestamp["build_start"] = metrics.BuildStart.Format(time.RFC3339)
+		}
+		if metrics.BuildEnd != nil {
+			result.Timestamp["build_end"] = metrics.BuildEnd.Format(time.RFC3339)
+		}
+		if metrics.TestStart != nil {
+			result.Timestamp["test_start"] = metrics.TestStart.Format(time.RFC3339)
+		}
+		if metrics.TestEnd != nil {
+			result.Timestamp["test_end"] = metrics.TestEnd.Format(time.RFC3339)
+		}
+		if metrics.PublishStart != nil {
+			result.Timestamp["publish_start"] = metrics.PublishStart.Format(time.RFC3339)
+		}
+		if metrics.PublishEnd != nil {
+			result.Timestamp["publish_end"] = metrics.PublishEnd.Format(time.RFC3339)
+		}
+		if metrics.JobEnd != nil {
+			result.Timestamp["job_end"] = metrics.JobEnd.Format(time.RFC3339)
+		}
+		
+		if metrics.BuildDuration > 0 {
+			result.Duration["build"] = metrics.BuildDuration.String()
+		}
+		if metrics.TestDuration > 0 {
+			result.Duration["test"] = metrics.TestDuration.String()
+		}
+		if metrics.PublishDuration > 0 {
+			result.Duration["publish"] = metrics.PublishDuration.String()
+		}
+		if metrics.TotalDuration > 0 {
+			result.Duration["total"] = metrics.TotalDuration.String()
+		}
+	}
 
 	// Step 6: Save detailed logs to files
 	if len(result.BuildLogs) > 0 {
@@ -287,6 +342,33 @@ func getJobLogs(serviceURL, jobID string) (types.JobLogs, error) {
 	}
 
 	return logsResp.Logs, nil
+}
+
+// getJobStatus retrieves status and metrics for a job
+func getJobStatus(serviceURL, jobID string) (types.GetStatusResponse, error) {
+	statusReq := types.GetStatusRequest{JobID: jobID}
+	reqBody, err := json.Marshal(statusReq)
+	if err != nil {
+		return types.GetStatusResponse{}, fmt.Errorf("failed to marshal status request: %w", err)
+	}
+
+	resp, err := http.Post(serviceURL+"/mcp/getStatus", "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return types.GetStatusResponse{}, fmt.Errorf("failed to get status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return types.GetStatusResponse{}, fmt.Errorf("status retrieval failed with status %d: %s", resp.StatusCode, body)
+	}
+
+	var statusResp types.GetStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&statusResp); err != nil {
+		return types.GetStatusResponse{}, fmt.Errorf("failed to decode status response: %w", err)
+	}
+
+	return statusResp, nil
 }
 
 // saveLogsToFile saves log lines to a file

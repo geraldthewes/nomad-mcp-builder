@@ -73,6 +73,17 @@ type JobLogs struct {
 
 // JobMetrics contains performance metrics for the job
 type JobMetrics struct {
+	// Phase timings
+	JobStart      *time.Time    `json:"job_start,omitempty"`
+	BuildStart    *time.Time    `json:"build_start,omitempty"`
+	BuildEnd      *time.Time    `json:"build_end,omitempty"`
+	TestStart     *time.Time    `json:"test_start,omitempty"`
+	TestEnd       *time.Time    `json:"test_end,omitempty"`
+	PublishStart  *time.Time    `json:"publish_start,omitempty"`
+	PublishEnd    *time.Time    `json:"publish_end,omitempty"`
+	JobEnd        *time.Time    `json:"job_end,omitempty"`
+	
+	// Phase durations
 	BuildDuration   time.Duration `json:"build_duration"`
 	TestDuration    time.Duration `json:"test_duration"`
 	PublishDuration time.Duration `json:"publish_duration"`

@@ -594,8 +594,11 @@ You can also test manually after discovering the service:
 # Discover service URL
 consul catalog service nomad-build-service
 
-# Submit test job (replace with discovered URL)
-curl -X POST http://10.0.1.12:31183/mcp/submitJob \
+# Or use Consul API to get the service endpoint
+SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
+
+# Submit test job (replace with discovered URL or use SERVICE_URL)
+curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/submitJob \
   -H "Content-Type: application/json" \
   -d '{
     "job_config": {
@@ -605,18 +608,17 @@ curl -X POST http://10.0.1.12:31183/mcp/submitJob \
       "dockerfile_path": "Dockerfile",
       "image_tags": ["hello-world-test"],
       "registry_url": "registry.cluster:5000/helloworld",
-      "test_commands": [],
       "test_entry_point": true
     }
   }'
 
 # Check status (use returned job_id)
-curl -X POST http://10.0.1.12:31183/mcp/getStatus \
+curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/getStatus \
   -H "Content-Type: application/json" \
   -d '{"jobID":"<job-id>"}'
 
 # Get logs when complete
-curl -X POST http://10.0.1.12:31183/mcp/getLogs \
+curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/getLogs \
   -H "Content-Type: application/json" \
   -d '{"jobID":"<job-id>"}'
 ```

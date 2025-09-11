@@ -64,7 +64,9 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Logs:      types.JobLogs{},
-		Metrics:   types.JobMetrics{},
+		Metrics:   types.JobMetrics{
+			JobStart: &now,
+		},
 	}
 	
 	// Create and submit the build job to Nomad
@@ -102,6 +104,7 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	job.BuildJobID = *buildJobSpec.ID
 	job.Status = types.StatusBuilding
 	job.StartedAt = &now
+	job.Metrics.BuildStart = &now
 	
 	nc.logger.WithFields(logrus.Fields{
 		"job_id":      jobID,
@@ -130,15 +133,25 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				nc.logger.WithError(err).Warn("Failed to capture build logs")
 			}
 			
+			// Mark build phase as complete (only set end time if not already set)
+			now := time.Now()
+			if job.Metrics.BuildEnd == nil {
+				job.Metrics.BuildEnd = &now
+				if job.Metrics.BuildStart != nil {
+					job.Metrics.BuildDuration = now.Sub(*job.Metrics.BuildStart)
+				}
+			}
+			
 			// Start test phase
 			if job.Status == types.StatusBuilding {
 				if err := nc.startTestPhase(job); err != nil {
 					job.Status = types.StatusFailed
 					job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
-					now := time.Now()
 					job.FinishedAt = &now
+					job.Metrics.JobEnd = &now
 				} else {
 					job.Status = types.StatusTesting
+					job.Metrics.TestStart = &now
 				}
 			}
 		case "failed":
@@ -158,6 +171,11 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			now := time.Now()
 			job.FinishedAt = &now
+			job.Metrics.BuildEnd = &now
+			job.Metrics.JobEnd = &now
+			if job.Metrics.BuildStart != nil {
+				job.Metrics.BuildDuration = now.Sub(*job.Metrics.BuildStart)
+			}
 		}
 	}
 	
@@ -210,10 +228,24 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			now := time.Now()
 			job.FinishedAt = &now
+			job.Metrics.TestEnd = &now
+			job.Metrics.JobEnd = &now
+			if job.Metrics.TestStart != nil {
+				job.Metrics.TestDuration = now.Sub(*job.Metrics.TestStart)
+			}
 		} else if allComplete {
 			// All tests completed successfully, capture logs before they disappear
 			if err := nc.capturePhaseLogs(job, "test"); err != nil {
 				nc.logger.WithError(err).Warn("Failed to capture test logs")
+			}
+			
+			// Mark test phase as complete (only set end time if not already set)
+			now := time.Now()
+			if job.Metrics.TestEnd == nil {
+				job.Metrics.TestEnd = &now
+				if job.Metrics.TestStart != nil {
+					job.Metrics.TestDuration = now.Sub(*job.Metrics.TestStart)
+				}
 			}
 			
 			// Start publish phase
@@ -221,10 +253,11 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				if err := nc.startPublishPhase(job); err != nil {
 					job.Status = types.StatusFailed
 					job.Error = fmt.Sprintf("Failed to start publish phase: %v", err)
-					now := time.Now()
 					job.FinishedAt = &now
+					job.Metrics.JobEnd = &now
 				} else {
 					job.Status = types.StatusPublishing
+					job.Metrics.PublishStart = &now
 				}
 			}
 		}
@@ -249,6 +282,20 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			job.Status = types.StatusSucceeded
 			now := time.Now()
 			job.FinishedAt = &now
+			
+			// Mark publish phase as complete (only set end time if not already set)
+			if job.Metrics.PublishEnd == nil {
+				job.Metrics.PublishEnd = &now
+				if job.Metrics.PublishStart != nil {
+					job.Metrics.PublishDuration = now.Sub(*job.Metrics.PublishStart)
+				}
+			}
+			
+			job.Metrics.JobEnd = &now
+			// Calculate total duration
+			if job.Metrics.JobStart != nil {
+				job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
+			}
 		case "failed":
 			// Capture logs from failed publish before they disappear
 			if err := nc.capturePhaseLogs(job, "publish"); err != nil {
@@ -266,6 +313,15 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			now := time.Now()
 			job.FinishedAt = &now
+			job.Metrics.PublishEnd = &now
+			job.Metrics.JobEnd = &now
+			if job.Metrics.PublishStart != nil {
+				job.Metrics.PublishDuration = now.Sub(*job.Metrics.PublishStart)
+			}
+			// Calculate total duration
+			if job.Metrics.JobStart != nil {
+				job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
+			}
 		}
 	}
 	

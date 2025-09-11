@@ -200,6 +200,12 @@ A build submission request from the agent could look like this:
 * The MCP API must be simple, with clear JSON request and response schemas.  
 * Error messages in logs must be detailed and directly reflect the output from the underlying tools to aid agent debugging.
 
+#### NFR4.1: Timestamp Standards
+
+* **UTC Only:** All timestamps in the system (logs, metrics, API responses, job status) must use UTC timezone exclusively. This ensures consistency across different deployment environments and eliminates timezone confusion in distributed systems.
+* **ISO 8601 Format:** All timestamp fields must use ISO 8601 format (`YYYY-MM-DDTHH:MM:SS.sssZ`) for standardization and interoperability.
+* **Phase Timing:** Job metrics must include detailed phase timestamps (`job_start`, `build_start`, `build_end`, `test_start`, `test_end`, `publish_start`, `publish_end`, `job_end`) to enable performance analysis and debugging.
+
 #### NFR5: Scalability
 
 * **Stateless Server:** The Go server must be stateless, with all job state managed by Nomad. This allows the server to be deployed as a replicated service job in Nomad for high availability and horizontal scaling.  
