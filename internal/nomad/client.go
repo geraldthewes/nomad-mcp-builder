@@ -329,6 +329,26 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 	return job, nil
 }
 
+// discoverTestJobs finds test jobs by querying Nomad for jobs matching the expected naming pattern
+func (nc *Client) discoverTestJobs(jobID string) ([]string, error) {
+	jobs, _, err := nc.client.Jobs().List(&nomadapi.QueryOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list jobs: %w", err)
+	}
+	
+	var testJobIDs []string
+	testEntryPrefix := fmt.Sprintf("test-entry-%s", jobID)
+	testCmdPrefix := fmt.Sprintf("test-cmd-%s", jobID)
+	
+	for _, job := range jobs {
+		if strings.HasPrefix(job.ID, testEntryPrefix) || strings.HasPrefix(job.ID, testCmdPrefix) {
+			testJobIDs = append(testJobIDs, job.ID)
+		}
+	}
+	
+	return testJobIDs, nil
+}
+
 // GetJobLogs retrieves logs from Nomad for all phases
 func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 	logs := types.JobLogs{
@@ -348,6 +368,11 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 	}
 	
 	// Get test logs from all test jobs
+	nc.logger.WithFields(logrus.Fields{
+		"job_id": job.ID,
+		"test_job_ids": job.TestJobIDs,
+	}).Info("GetJobLogs: checking test job IDs")
+	
 	if len(job.TestJobIDs) > 0 {
 		var allTestLogs []string
 		for i, testJobID := range job.TestJobIDs {
@@ -363,6 +388,35 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 			}
 		}
 		logs.Test = allTestLogs
+	} else {
+		// Fallback: try to discover test jobs if TestJobIDs is empty
+		nc.logger.WithField("job_id", job.ID).Info("GetJobLogs: TestJobIDs empty, attempting discovery")
+		discoveredTestJobs, err := nc.discoverTestJobs(job.ID)
+		if err != nil {
+			nc.logger.WithError(err).Warn("GetJobLogs: Failed to discover test jobs")
+		} else if len(discoveredTestJobs) > 0 {
+			nc.logger.WithFields(logrus.Fields{
+				"job_id": job.ID,
+				"discovered_test_jobs": discoveredTestJobs,
+			}).Info("GetJobLogs: Found test jobs via discovery")
+			
+			var allTestLogs []string
+			for i, testJobID := range discoveredTestJobs {
+				testLogs, err := nc.getJobLogs(testJobID)
+				if err != nil {
+					nc.logger.WithError(err).WithField("test_job_id", testJobID).Warn("Failed to get discovered test logs")
+					allTestLogs = append(allTestLogs, fmt.Sprintf("Failed to get logs for test job %d (%s): %v", i, testJobID, err))
+				} else {
+					// Add header to distinguish between different test jobs
+					allTestLogs = append(allTestLogs, fmt.Sprintf("=== Test Job %d (%s) ===", i, testJobID))
+					allTestLogs = append(allTestLogs, testLogs...)
+					allTestLogs = append(allTestLogs, "") // Empty line for separation
+				}
+			}
+			logs.Test = allTestLogs
+		} else {
+			nc.logger.WithField("job_id", job.ID).Info("GetJobLogs: No test jobs found via discovery")
+		}
 	}
 	
 	// Get publish logs
@@ -799,8 +853,10 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 		"job_id":       job.ID,
 		"test_jobs":    len(testJobIDs),
 		"test_job_ids": testJobIDs,
-	}).Info("All test jobs submitted to Nomad")
+	}).Info("All test jobs submitted to Nomad - TestJobIDs set in memory")
 	
+	// Note: TestJobIDs need to be persisted by the caller to ensure
+	// they're available for subsequent status checks and log capture
 	return nil
 }
 
@@ -1130,14 +1186,36 @@ func (nc *Client) capturePhaseLogs(job *types.Job, phase string) error {
 		}).Info("Captured build phase logs")
 		
 	case "test":
-		if len(job.TestJobIDs) == 0 {
-			return nil // No jobs to capture logs from
+		var testJobIDs []string
+		
+		// If TestJobIDs are available in the job object, use them
+		if len(job.TestJobIDs) > 0 {
+			testJobIDs = job.TestJobIDs
+		} else {
+			// Fallback: discover test jobs by searching for jobs with the expected naming pattern
+			nc.logger.WithFields(logrus.Fields{
+				"job_id": job.ID,
+				"phase": phase,
+			}).Warn("TestJobIDs not found in job object, attempting to discover test jobs")
+			
+			// Query Nomad for jobs matching the test job naming pattern
+			discoveredJobs, err := nc.discoverTestJobs(job.ID)
+			if err != nil {
+				nc.logger.WithError(err).Warn("Failed to discover test jobs for log capture")
+				return nil
+			}
+			testJobIDs = discoveredJobs
+			
+			if len(testJobIDs) == 0 {
+				nc.logger.WithField("job_id", job.ID).Warn("No test jobs found for log capture")
+				return nil
+			}
 		}
 		
 		var allTestLogs []string
 		totalLogLines := 0
 		
-		for i, testJobID := range job.TestJobIDs {
+		for i, testJobID := range testJobIDs {
 			logs, err := nc.getJobLogs(testJobID)
 			if err != nil {
 				nc.logger.WithError(err).WithField("test_job_id", testJobID).Warn("Failed to capture logs for test job")
