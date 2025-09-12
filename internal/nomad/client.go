@@ -142,8 +142,13 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				}
 			}
 			
-			// Start test phase
+			// Start test phase with a small delay to avoid Docker layer race conditions
 			if job.Status == types.StatusBuilding {
+				// Add a brief delay to ensure Docker daemon has finished cleaning up build layers
+				// This helps prevent "file exists" errors when test jobs try to pull the same image
+				nc.logger.WithField("job_id", job.ID).Info("Build completed, waiting 3 seconds before starting tests to avoid Docker layer conflicts")
+				time.Sleep(3 * time.Second)
+				
 				if err := nc.startTestPhase(job); err != nil {
 					job.Status = types.StatusFailed
 					job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
@@ -786,6 +791,40 @@ func (nc *Client) getJobErrorDetails(nomadJobID string) (string, error) {
 	return "Unknown failure", nil
 }
 
+// getBuildJobNodeID retrieves the node ID where the build job ran
+func (nc *Client) getBuildJobNodeID(buildJobID string) (string, error) {
+	if buildJobID == "" {
+		return "", fmt.Errorf("build job ID is empty")
+	}
+	
+	_, _, err := nc.client.Jobs().Info(buildJobID, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get job info for %s: %w", buildJobID, err)
+	}
+	
+	// Get allocations for the build job
+	allocs, _, err := nc.client.Jobs().Allocations(buildJobID, false, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get allocations for job %s: %w", buildJobID, err)
+	}
+	
+	// Find a completed allocation to get the node ID
+	for _, alloc := range allocs {
+		if alloc.ClientStatus == "complete" && alloc.NodeID != "" {
+			return alloc.NodeID, nil
+		}
+	}
+	
+	// If no completed allocation, try any allocation with a node ID
+	for _, alloc := range allocs {
+		if alloc.NodeID != "" {
+			return alloc.NodeID, nil
+		}
+	}
+	
+	return "", fmt.Errorf("no allocations found with node ID for build job %s", buildJobID)
+}
+
 func (nc *Client) startTestPhase(job *types.Job) error {
 	if len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint {
 		// No tests configured, skip to publish phase
@@ -793,7 +832,20 @@ func (nc *Client) startTestPhase(job *types.Job) error {
 		return nc.startPublishPhase(job)
 	}
 	
-	testJobSpecs, err := nc.createTestJobSpecs(job)
+	// Get the build job's node ID to avoid scheduling test jobs on the same node
+	buildNodeID, err := nc.getBuildJobNodeID(job.BuildJobID)
+	if err != nil {
+		nc.logger.WithError(err).Warn("Failed to get build job node ID, proceeding without node constraints")
+		buildNodeID = "" // Empty string will disable node constraints
+	}
+	
+	nc.logger.WithFields(logrus.Fields{
+		"job_id": job.ID,
+		"build_job_id": job.BuildJobID, 
+		"build_node_id": buildNodeID,
+	}).Info("Starting test phase with node constraint to avoid Docker layer conflicts")
+	
+	testJobSpecs, err := nc.createTestJobSpecs(job, buildNodeID)
 	if err != nil {
 		return fmt.Errorf("failed to create test job specs: %w", err)
 	}

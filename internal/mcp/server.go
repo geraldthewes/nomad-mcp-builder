@@ -29,8 +29,33 @@ type Server struct {
 	wsConnections map[string][]*websocket.Conn
 	wsMutex       sync.RWMutex
 	
+	// Job-level mutexes to prevent concurrent updates to the same job
+	jobMutexes map[string]*sync.Mutex
+	jobMutexLock sync.RWMutex
+	
 	// WebSocket upgrader
 	upgrader websocket.Upgrader
+}
+
+// getJobMutex returns or creates a mutex for the given job ID
+func (s *Server) getJobMutex(jobID string) *sync.Mutex {
+	s.jobMutexLock.Lock()
+	defer s.jobMutexLock.Unlock()
+	
+	if mutex, exists := s.jobMutexes[jobID]; exists {
+		return mutex
+	}
+	
+	mutex := &sync.Mutex{}
+	s.jobMutexes[jobID] = mutex
+	return mutex
+}
+
+// lockJob locks the job for exclusive access and returns an unlock function
+func (s *Server) lockJob(jobID string) func() {
+	mutex := s.getJobMutex(jobID)
+	mutex.Lock()
+	return mutex.Unlock
 }
 
 // NewServer creates a new MCP server
@@ -41,6 +66,7 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 		storage:       storage,
 		logger:        logrus.New(),
 		wsConnections: make(map[string][]*websocket.Conn),
+		jobMutexes:    make(map[string]*sync.Mutex),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for now
@@ -84,6 +110,9 @@ func (s *Server) Start(ctx context.Context) error {
 	
 	// Start background cleanup routine
 	go s.backgroundCleanup(ctx)
+	
+	// Start background job monitoring routine
+	go s.backgroundJobMonitor(ctx)
 	
 	return server.ListenAndServe()
 }
@@ -524,6 +553,80 @@ func (s *Server) streamJobLogs(conn *websocket.Conn, jobID string) {
 			// Stop streaming if job is finished
 			if job.Status == types.StatusSucceeded || job.Status == types.StatusFailed {
 				return
+			}
+		}
+	}
+}
+
+func (s *Server) backgroundJobMonitor(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second) // Check job status every 5 seconds
+	defer ticker.Stop()
+	
+	s.logger.Info("Starting background job monitoring")
+	
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("Stopping background job monitoring")
+			return
+		case <-ticker.C:
+			jobIDs, err := s.storage.ListJobs()
+			if err != nil {
+				s.logger.WithError(err).Warn("Failed to list jobs during monitoring")
+				continue
+			}
+			
+			activeJobs := 0
+			
+			for _, jobID := range jobIDs {
+				// Get the job details
+				job, err := s.storage.GetJob(jobID)
+				if err != nil {
+					s.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to get job during monitoring")
+					continue
+				}
+				
+				// Only monitor jobs that are not in final states
+				if job.Status != types.StatusSucceeded && job.Status != types.StatusFailed {
+					activeJobs++
+					
+					// Lock the job to prevent concurrent updates
+					unlock := s.lockJob(job.ID)
+					
+					// Re-fetch job after acquiring lock (it might have been updated)
+					freshJob, err := s.storage.GetJob(job.ID)
+					if err != nil {
+						unlock()
+						s.logger.WithError(err).WithField("job_id", job.ID).Warn("Failed to re-fetch job during monitoring")
+						continue
+					}
+					
+					// Update job status which will trigger phase transitions
+					updatedJob, err := s.nomadClient.UpdateJobStatus(freshJob)
+					if err != nil {
+						unlock()
+						s.logger.WithError(err).WithField("job_id", job.ID).Warn("Failed to update job status during monitoring")
+						continue
+					}
+					
+					// Save updated job state
+					s.storage.UpdateJob(updatedJob)
+					
+					// Log status changes for debugging
+					if updatedJob.Status != freshJob.Status {
+						s.logger.WithFields(logrus.Fields{
+							"job_id": job.ID,
+							"old_status": freshJob.Status,
+							"new_status": updatedJob.Status,
+						}).Info("Job status changed")
+					}
+					
+					unlock()
+				}
+			}
+			
+			if activeJobs > 0 {
+				s.logger.WithField("active_jobs", activeJobs).Debug("Monitoring active jobs")
 			}
 		}
 	}
@@ -1004,6 +1107,9 @@ func validateJobConfig(config *types.JobConfig) error {
 	if config.DockerfilePath == "" {
 		return fmt.Errorf("dockerfile_path is required")
 	}
+	if config.ImageName == "" {
+		return fmt.Errorf("image_name is required")
+	}
 	if len(config.ImageTags) == 0 {
 		return fmt.Errorf("image_tags is required and cannot be empty")
 	}
@@ -1095,6 +1201,10 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID s
 
 // handleJobLogs handles GET /mcp/job/{jobID}/logs
 func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	// Lock the job to ensure consistent read during potential updates
+	unlock := s.lockJob(jobID)
+	defer unlock()
+	
 	job, err := s.storage.GetJob(jobID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get job")

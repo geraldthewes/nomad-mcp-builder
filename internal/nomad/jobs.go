@@ -50,7 +50,11 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"# Ensure cache directories exist and have proper permissions",
 		"mkdir -p /var/lib/containers /var/lib/shared /var/lib/containers/tmp",
 		"",
-		"# Build image with Buildah using layer caching",
+		"# Configure Buildah to use fuse-overlayfs to prevent layer conflicts",
+		"export STORAGE_DRIVER=overlay",
+		"export STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev'",
+		"",
+		"# Build image with Buildah using layer caching and fuse-overlayfs",
 		fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
@@ -67,13 +71,13 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"  echo 'No registry credentials file, attempting anonymous push...'",
 		"fi",
 		"",
-		"# Push temporary image to registry",
-		fmt.Sprintf("buildah push %s docker://%s", tempImageName, tempImageName),
+		"# Push temporary image to registry using fuse-overlayfs",
+		fmt.Sprintf("STORAGE_DRIVER=overlay STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev' buildah push %s docker://%s", tempImageName, tempImageName),
 		"",
 		"# Verify image is fully available in registry before proceeding",
 		"echo 'Verifying image availability in registry...'",
 		fmt.Sprintf("for i in {1..30}; do"),
-		fmt.Sprintf("  if buildah pull docker://%s >/dev/null 2>&1; then", tempImageName),
+		fmt.Sprintf("  if STORAGE_DRIVER=overlay STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev' buildah pull docker://%s >/dev/null 2>&1; then", tempImageName),
 		"    echo 'Image verified available in registry'",
 		"    break",
 		"  else",
@@ -177,7 +181,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 }
 
 // createTestJobSpecs creates Nomad job specifications for the test phase using Docker driver directly
-func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
+func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nomadapi.Job, error) {
 	var testJobs []*nomadapi.Job
 	
 	// Resource limits for test jobs
@@ -223,7 +227,19 @@ func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
 					{
 						Name:        stringPtr("test"),
 						Count:       intPtr(1),
-						Constraints: []*nomadapi.Constraint{}, // No constraints needed
+						Constraints: func() []*nomadapi.Constraint {
+							if buildNodeID != "" {
+								// Prevent test jobs from running on the same node as build job to avoid Docker layer conflicts
+								return []*nomadapi.Constraint{
+									{
+										LTarget: "${node.unique.id}",
+										RTarget: buildNodeID,
+										Operand: "!=",
+									},
+								}
+							}
+							return []*nomadapi.Constraint{} // No constraints if buildNodeID is empty
+						}(),
 						RestartPolicy: &nomadapi.RestartPolicy{
 							Attempts: intPtr(0), // No retries for test failures
 						},
@@ -235,6 +251,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
 									"image":   tempImageName,  // Use the built image directly
 									"command": "sh",
 									"args":    []string{"-c", testCmd},
+									"force_pull": true, // Force Docker to always pull fresh image to avoid layer conflicts
 									// Add registry certificates for private registries
 									"volumes": []string{
 										"/etc/docker/certs.d:/etc/docker/certs.d:ro",
@@ -293,7 +310,19 @@ func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
 				{
 					Name:        stringPtr("test"),
 					Count:       intPtr(1),
-					Constraints: []*nomadapi.Constraint{}, // No constraints needed
+					Constraints: func() []*nomadapi.Constraint {
+						if buildNodeID != "" {
+							// Prevent test jobs from running on the same node as build job to avoid Docker layer conflicts
+							return []*nomadapi.Constraint{
+								{
+									LTarget: "${node.unique.id}",
+									RTarget: buildNodeID,
+									Operand: "!=",
+								},
+							}
+						}
+						return []*nomadapi.Constraint{} // No constraints if buildNodeID is empty
+					}(),
 					RestartPolicy: &nomadapi.RestartPolicy{
 						Attempts: intPtr(0), // No retries for test failures
 					},
@@ -303,6 +332,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job) ([]*nomadapi.Job, error) {
 							Driver: "docker",
 							Config: map[string]interface{}{
 								"image": tempImageName, // Use the built image directly - no command/args means use ENTRYPOINT/CMD
+								"force_pull": true, // Force Docker to always pull fresh image to avoid layer conflicts
 								// Add registry certificates for private registries
 								"volumes": []string{
 									"/etc/docker/certs.d:/etc/docker/certs.d:ro",
@@ -375,7 +405,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	}
 	
 	for _, tag := range job.Config.ImageTags {
-		finalImageName := fmt.Sprintf("%s:%s", job.Config.RegistryURL, tag)
+		finalImageName := fmt.Sprintf("%s/%s:%s", job.Config.RegistryURL, job.Config.ImageName, tag)
 		publishCommands = append(publishCommands,
 			fmt.Sprintf("buildah tag %s %s", tempImageName, finalImageName),
 			fmt.Sprintf("buildah push %s docker://%s", finalImageName, finalImageName),

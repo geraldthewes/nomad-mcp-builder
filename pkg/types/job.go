@@ -21,6 +21,7 @@ type JobConfig struct {
 	GitRef                  string   `json:"git_ref"`
 	GitCredentialsPath      string   `json:"git_credentials_path"`
 	DockerfilePath          string   `json:"dockerfile_path"`
+	ImageName               string   `json:"image_name"`
 	ImageTags               []string `json:"image_tags"`
 	RegistryURL             string   `json:"registry_url"`
 	RegistryCredentialsPath string   `json:"registry_credentials_path"`

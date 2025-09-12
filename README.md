@@ -264,6 +264,8 @@ plugin "docker" {
 
 ### Submit a Build Job
 
+**Note**: The `image_name` field is now **required** and specifies the name of the Docker image (e.g., "myapp", "web-server"). The final image will be tagged as `registry_url/image_name:tag`.
+
 ```bash
 curl -X POST http://localhost:8080/mcp/submitJob \
   -H "Content-Type: application/json" \
@@ -274,8 +276,9 @@ curl -X POST http://localhost:8080/mcp/submitJob \
       "git_ref": "main", 
       "git_credentials_path": "secret/nomad/jobs/git-credentials",
       "dockerfile_path": "Dockerfile",
+      "image_name": "myapp",
       "image_tags": ["latest", "v1.0.0"],
-      "registry_url": "docker.io/user/app",
+      "registry_url": "docker.io/user",
       "registry_credentials_path": "secret/nomad/jobs/registry-credentials",
       "test_commands": [
         "/app/run-tests.sh",
@@ -337,7 +340,8 @@ You can test the MCP endpoints using the [MCP Inspector](https://github.com/mode
      "name": "submitJob",
      "arguments": {
        "repo_url": "https://github.com/example/repo.git",
-       "registry_url": "registry.example.com/myapp",
+       "image_name": "myapp",
+       "registry_url": "registry.example.com",
        "image_tags": ["latest", "v1.0.0"],
        "test_commands": ["npm test", "npm run lint"]
      }
@@ -612,8 +616,9 @@ curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/submitJob \
       "repo_url": "https://github.com/geraldthewes/docker-build-hello-world.git",
       "git_ref": "main",
       "dockerfile_path": "Dockerfile",
+      "image_name": "helloworld",
       "image_tags": ["hello-world-test"],
-      "registry_url": "registry.cluster:5000/helloworld",
+      "registry_url": "registry.cluster:5000",
       "test_entry_point": true
     }
   }'
