@@ -870,6 +870,9 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 	} else {
 		jobConfig.DockerfilePath = "Dockerfile"
 	}
+	if imageName, ok := args["image_name"].(string); ok {
+		jobConfig.ImageName = imageName
+	}
 	if regURL, ok := args["registry_url"].(string); ok {
 		jobConfig.RegistryURL = regURL
 	}
@@ -895,6 +898,16 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 				jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
 			}
 		}
+	}
+
+	// Handle test_entry_point parameter
+	if testEntryPoint, ok := args["test_entry_point"].(bool); ok {
+		jobConfig.TestEntryPoint = testEntryPoint
+	}
+
+	// Validate job config using the same validation as web interface
+	if err := validateJobConfig(&jobConfig); err != nil {
+		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "Job configuration validation failed", err.Error())
 	}
 
 	// Create job using existing logic

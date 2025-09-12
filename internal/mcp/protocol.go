@@ -107,6 +107,10 @@ func GetTools() []Tool {
 						"description": "Path to Dockerfile in repository",
 						"default":     "Dockerfile",
 					},
+					"image_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Base name for the Docker image",
+					},
 					"image_tags": map[string]interface{}{
 						"type": "array",
 						"items": map[string]interface{}{
@@ -130,6 +134,11 @@ func GetTools() []Tool {
 						},
 						"description": "List of test commands to run",
 					},
+					"test_entry_point": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to test the image entry point",
+						"default":     false,
+					},
 					"resource_limits": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -148,7 +157,7 @@ func GetTools() []Tool {
 						},
 					},
 				},
-				Required: []string{"repo_url", "registry_url", "image_tags"},
+				Required: []string{"repo_url", "registry_url", "image_name", "image_tags"},
 			},
 		},
 		{
