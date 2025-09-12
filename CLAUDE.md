@@ -41,6 +41,12 @@ The system consists of:
 - All secrets handled via Nomad Vault integration - server never handles raw credentials
 - Stateless design for horizontal scaling
 
+### API Validation Requirements
+- **CRITICAL**: Both the web interface (`/mcp/submitJob`) and the MCP interface (`tools/call` with `submitJob`) must have identical parameter validation
+- Always call `validateJobConfig()` in both interfaces to ensure consistent validation
+- Required parameters must match between both interfaces (owner, repo_url, git_ref, dockerfile_path, image_name, image_tags, registry_url)
+- This prevents runtime errors like "invalid reference format" when Docker image names are malformed due to missing parameters
+
 ## MCP API Endpoints (Planned)
 
 The service will expose these MCP endpoints:
