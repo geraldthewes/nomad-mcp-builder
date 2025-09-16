@@ -604,6 +604,17 @@ func (s *Server) backgroundJobMonitor(ctx context.Context) {
 					// Update job status which will trigger phase transitions
 					updatedJob, err := s.nomadClient.UpdateJobStatus(freshJob)
 					if err != nil {
+						// Check if this is a 404 error indicating the job no longer exists in Nomad
+						if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "job not found") {
+							s.logger.WithField("job_id", job.ID).Info("Job no longer exists in Nomad, removing from storage")
+							// Move job to history before deleting from active storage
+							if history := s.convertJobToHistory(freshJob); history != nil {
+								s.storage.StoreJobHistory(history)
+							}
+							s.storage.DeleteJob(job.ID)
+							unlock()
+							continue
+						}
 						unlock()
 						s.logger.WithError(err).WithField("job_id", job.ID).Warn("Failed to update job status during monitoring")
 						continue
@@ -680,6 +691,31 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// convertJobToHistory converts a Job to JobHistory for archival
+func (s *Server) convertJobToHistory(job *types.Job) *types.JobHistory {
+	if job == nil {
+		return nil
+	}
+
+	var duration time.Duration
+	if job.FinishedAt != nil {
+		duration = job.FinishedAt.Sub(job.CreatedAt)
+	} else {
+		duration = time.Since(job.CreatedAt)
+	}
+
+	history := &types.JobHistory{
+		ID:        job.ID,
+		Config:    job.Config,
+		Status:    job.Status,
+		CreatedAt: job.CreatedAt,
+		Duration:  duration,
+		Metrics:   job.Metrics,
+	}
+
+	return history
 }
 
 // MCP Protocol Handlers
