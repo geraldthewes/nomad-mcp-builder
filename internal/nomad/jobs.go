@@ -34,7 +34,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		nc.config.Build.RegistryConfig.TempPrefix, 
 		job.ID)
 	
-	// Build the task commands
+	// Build the task commands with layer caching and proper HTTPS handling
 	buildCommands := []string{
 		"#!/bin/bash",
 		"set -euo pipefail",
@@ -47,11 +47,11 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"# Ensure cache directories exist and have proper permissions",
 		"mkdir -p /var/lib/containers /var/lib/shared /var/lib/containers/tmp",
 		"",
-		"# Configure Buildah to use fuse-overlayfs to prevent layer conflicts",
+		"# Configure Buildah for layer caching",
 		"export STORAGE_DRIVER=overlay",
-		"export STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev'",
+		"export BUILDAH_LAYERS=true",  // Enable layer caching by default
 		"",
-		"# Build image with Buildah using layer caching and fuse-overlayfs",
+		"# Build image with Buildah using layer caching",
 		fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
 			job.Config.DockerfilePath, tempImageName),
 		"",
@@ -68,29 +68,17 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"  echo 'No registry credentials file, attempting anonymous push...'",
 		"fi",
 		"",
-		"# Push temporary image to registry using fuse-overlayfs",
-		fmt.Sprintf("STORAGE_DRIVER=overlay STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev' buildah push %s docker://%s", tempImageName, tempImageName),
+		"# Configure buildah to use TLS and mount certificates properly",
+		"export BUILDAH_TLS_VERIFY=true",
 		"",
-		"# Verify image is fully available in registry before proceeding",
-		"echo 'Verifying image availability in registry...'",
-		fmt.Sprintf("for i in {1..30}; do"),
-		fmt.Sprintf("  if STORAGE_DRIVER=overlay STORAGE_OPTS='overlay.mount_program=/usr/bin/fuse-overlayfs,overlay.mountopt=nodev' buildah pull docker://%s >/dev/null 2>&1; then", tempImageName),
-		"    echo 'Image verified available in registry'",
-		"    break",
-		"  else",
-		"    echo \"Attempt $i: Image not yet available, waiting 2 seconds...\"",
-		"    sleep 2",
-		"  fi",
-		"  if [ $i -eq 30 ]; then",
-		"    echo 'ERROR: Image verification timeout after 60 seconds'",
-		"    exit 1",
-		"  fi",
-		"done",
+		"# Push temporary image to registry using HTTPS with proper TLS verification",
+		fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", tempImageName, tempImageName),
 		"",
 		"# Force sync file system to ensure all writes are committed",
 		"sync",
 		"",
 		"echo 'Build completed successfully'",
+		"exit 0", // Explicitly exit to ensure container terminates
 	}
 	
 	jobSpec := &nomadapi.Job{
@@ -120,27 +108,19 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"image": "quay.io/buildah/stable:latest",
 							"command": "/bin/bash",
 							"args": []string{"-c", strings.Join(buildCommands, "\n")},
-							"privileged": false, // Use proper security configuration instead of privileged
-							"devices": []map[string]interface{}{
-								{
-									"host_path":      "/dev/fuse",
-									"container_path": "/dev/fuse",
-								},
-							},
-							"security_opt": []string{
-								"seccomp=unconfined", // Required for Buildah syscalls
-								"apparmor=unconfined",
-							},
+							"privileged": true, // Use privileged for simpler overlay without fuse-overlayfs
 							"volumes": []string{
-								"/opt/nomad/data/buildah-cache:/var/lib/containers:rw",
-								"/opt/nomad/data/buildah-shared:/var/lib/shared:ro", // Additional image stores
-								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates
+								"/opt/nomad/data/buildah-cache:/var/lib/containers:rw", // Persistent layer cache
+								"/etc/docker/certs.d:/etc/containers/certs.d:ro",   // Registry certificates for buildah
+								"/etc/docker/certs.d:/etc/docker/certs.d:ro",       // Registry certificates for Docker compat
+								"/etc/ssl/certs:/etc/ssl/certs:ro",                 // System CA certificates
 							},
 						},
 						Env: map[string]string{
 							"BUILDAH_ISOLATION": "chroot",
 							"STORAGE_DRIVER":    "overlay",
-							"STORAGE_OPTS":      "overlay.mount_program=/usr/bin/fuse-overlayfs",
+							"BUILDAH_LAYERS":    "true", // Enable layer caching for large images
+							"BUILDAH_TLS_VERIFY": "true", // Enable TLS verification
 							"TMPDIR":            "/var/lib/containers/tmp", // Use persistent tmp for caching
 						},
 						Resources: &nomadapi.Resources{
@@ -420,7 +400,10 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		)
 	}
 	
-	publishCommands = append(publishCommands, "echo 'All images published successfully'")
+	publishCommands = append(publishCommands, 
+		"echo 'All images published successfully'",
+		"exit 0", // Explicitly exit to ensure container terminates
+	)
 	
 	jobSpec := &nomadapi.Job{
 		ID:          &jobID,
