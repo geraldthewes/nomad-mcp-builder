@@ -62,6 +62,7 @@ func TestBuildWorkflow(t *testing.T) {
 		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
 		GitRef:          "main",
 		DockerfilePath:  "Dockerfile",
+		ImageName:       "hello-world-test",
 		ImageTags:       []string{"hello-world-test"},
 		RegistryURL:     "registry.cluster:5000/helloworld",
 		TestCommands:    []string{}, // Empty to use entry point

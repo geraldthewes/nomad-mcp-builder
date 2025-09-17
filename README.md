@@ -152,8 +152,9 @@ The service stores configuration in Consul KV at `nomad-build-service/config/`:
 ```bash
 consul kv put nomad-build-service/config/build_timeout "45m"
 consul kv put nomad-build-service/config/test_timeout "20m"
-consul kv put nomad-build-service/config/default_resource_limits/cpu "2000"
-consul kv put nomad-build-service/config/default_resource_limits/memory "4096"
+consul kv put nomad-build-service/config/default_resource_limits/cpu "1000"
+consul kv put nomad-build-service/config/default_resource_limits/memory "2048"
+consul kv put nomad-build-service/config/default_resource_limits/disk "10240"
 ```
 
 ### Vault Secrets
@@ -259,6 +260,50 @@ plugin "docker" {
 ### Metrics
 
 - `GET /metrics` - Prometheus metrics (default port 9090)
+
+## Resource Configuration
+
+Jobs can specify custom resource limits using the optional `resource_limits` parameter. If not specified, the following defaults are used:
+
+### Default Resource Limits by Phase
+
+- **Build Phase** (most resource-intensive):
+  - CPU: 1000 MHz
+  - Memory: 2048 MB (2 GB)
+  - Disk: 10240 MB (10 GB)
+
+- **Test Phase** (moderate resources):
+  - CPU: 500 MHz
+  - Memory: 1024 MB (1 GB)
+  - Disk: 2048 MB (2 GB)
+
+- **Publish Phase** (minimal resources):
+  - CPU: 500 MHz
+  - Memory: 1024 MB (1 GB)
+  - Disk: 2048 MB (2 GB)
+
+### Custom Resource Configuration
+
+You can override these defaults by including a `resource_limits` object in your job submission:
+
+```json
+{
+  "job_config": {
+    "owner": "myorg",
+    "repo_url": "https://github.com/myorg/myapp.git",
+    "image_name": "myapp",
+    "image_tags": ["latest"],
+    "registry_url": "registry.cluster:5000/myapp",
+    "resource_limits": {
+      "cpu": "2000",     // 2000 MHz (2 CPU cores)
+      "memory": "4096",  // 4096 MB (4 GB RAM)
+      "disk": "20480"    // 20480 MB (20 GB disk)
+    }
+  }
+}
+```
+
+**Note**: Resource limits apply to all phases (build, test, publish). Consider your workload requirements when setting custom limits.
 
 ## Usage Examples
 
