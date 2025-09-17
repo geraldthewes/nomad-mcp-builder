@@ -157,7 +157,7 @@ func GetTools() []Tool {
 						},
 					},
 				},
-				Required: []string{"repo_url", "registry_url", "image_name", "image_tags"},
+				Required: []string{"owner", "repo_url", "image_name", "image_tags", "registry_url"},
 			},
 		},
 		{
