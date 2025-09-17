@@ -32,11 +32,183 @@ type JobConfig struct {
 	TestTimeout             *time.Duration  `json:"test_timeout,omitempty"`
 }
 
-// ResourceLimits defines resource constraints for build jobs
-type ResourceLimits struct {
+// PhaseResourceLimits defines resource constraints for a single phase
+type PhaseResourceLimits struct {
 	CPU    string `json:"cpu"`    // e.g., "1000" (MHz)
 	Memory string `json:"memory"` // e.g., "2048" (MB)
 	Disk   string `json:"disk"`   // e.g., "10240" (MB)
+}
+
+// ResourceLimits defines resource constraints for build jobs per phase
+type ResourceLimits struct {
+	// Legacy fields for backward compatibility
+	CPU    string `json:"cpu,omitempty"`    // e.g., "1000" (MHz) - applies to all phases if per-phase not specified
+	Memory string `json:"memory,omitempty"` // e.g., "2048" (MB) - applies to all phases if per-phase not specified
+	Disk   string `json:"disk,omitempty"`   // e.g., "10240" (MB) - applies to all phases if per-phase not specified
+
+	// Per-phase resource limits
+	Build   *PhaseResourceLimits `json:"build,omitempty"`
+	Test    *PhaseResourceLimits `json:"test,omitempty"`
+	Publish *PhaseResourceLimits `json:"publish,omitempty"`
+}
+
+// GetBuildLimits returns the resource limits for the build phase
+func (rl *ResourceLimits) GetBuildLimits(defaults PhaseResourceLimits) PhaseResourceLimits {
+	if rl == nil {
+		return defaults
+	}
+
+	// If phase-specific limits are provided, use them
+	if rl.Build != nil {
+		result := PhaseResourceLimits{}
+		if rl.Build.CPU != "" {
+			result.CPU = rl.Build.CPU
+		} else if rl.CPU != "" {
+			result.CPU = rl.CPU // Fall back to legacy global
+		} else {
+			result.CPU = defaults.CPU
+		}
+		if rl.Build.Memory != "" {
+			result.Memory = rl.Build.Memory
+		} else if rl.Memory != "" {
+			result.Memory = rl.Memory // Fall back to legacy global
+		} else {
+			result.Memory = defaults.Memory
+		}
+		if rl.Build.Disk != "" {
+			result.Disk = rl.Build.Disk
+		} else if rl.Disk != "" {
+			result.Disk = rl.Disk // Fall back to legacy global
+		} else {
+			result.Disk = defaults.Disk
+		}
+		return result
+	}
+
+	// Fall back to legacy global limits if provided
+	result := PhaseResourceLimits{}
+	if rl.CPU != "" {
+		result.CPU = rl.CPU
+	} else {
+		result.CPU = defaults.CPU
+	}
+	if rl.Memory != "" {
+		result.Memory = rl.Memory
+	} else {
+		result.Memory = defaults.Memory
+	}
+	if rl.Disk != "" {
+		result.Disk = rl.Disk
+	} else {
+		result.Disk = defaults.Disk
+	}
+	return result
+}
+
+// GetTestLimits returns the resource limits for the test phase
+func (rl *ResourceLimits) GetTestLimits(defaults PhaseResourceLimits) PhaseResourceLimits {
+	if rl == nil {
+		return defaults
+	}
+
+	// If phase-specific limits are provided, use them
+	if rl.Test != nil {
+		result := PhaseResourceLimits{}
+		if rl.Test.CPU != "" {
+			result.CPU = rl.Test.CPU
+		} else if rl.CPU != "" {
+			result.CPU = rl.CPU // Fall back to legacy global
+		} else {
+			result.CPU = defaults.CPU
+		}
+		if rl.Test.Memory != "" {
+			result.Memory = rl.Test.Memory
+		} else if rl.Memory != "" {
+			result.Memory = rl.Memory // Fall back to legacy global
+		} else {
+			result.Memory = defaults.Memory
+		}
+		if rl.Test.Disk != "" {
+			result.Disk = rl.Test.Disk
+		} else if rl.Disk != "" {
+			result.Disk = rl.Disk // Fall back to legacy global
+		} else {
+			result.Disk = defaults.Disk
+		}
+		return result
+	}
+
+	// Fall back to legacy global limits if provided
+	result := PhaseResourceLimits{}
+	if rl.CPU != "" {
+		result.CPU = rl.CPU
+	} else {
+		result.CPU = defaults.CPU
+	}
+	if rl.Memory != "" {
+		result.Memory = rl.Memory
+	} else {
+		result.Memory = defaults.Memory
+	}
+	if rl.Disk != "" {
+		result.Disk = rl.Disk
+	} else {
+		result.Disk = defaults.Disk
+	}
+	return result
+}
+
+// GetPublishLimits returns the resource limits for the publish phase
+func (rl *ResourceLimits) GetPublishLimits(defaults PhaseResourceLimits) PhaseResourceLimits {
+	if rl == nil {
+		return defaults
+	}
+
+	// If phase-specific limits are provided, use them
+	if rl.Publish != nil {
+		result := PhaseResourceLimits{}
+		if rl.Publish.CPU != "" {
+			result.CPU = rl.Publish.CPU
+		} else if rl.CPU != "" {
+			result.CPU = rl.CPU // Fall back to legacy global
+		} else {
+			result.CPU = defaults.CPU
+		}
+		if rl.Publish.Memory != "" {
+			result.Memory = rl.Publish.Memory
+		} else if rl.Memory != "" {
+			result.Memory = rl.Memory // Fall back to legacy global
+		} else {
+			result.Memory = defaults.Memory
+		}
+		if rl.Publish.Disk != "" {
+			result.Disk = rl.Publish.Disk
+		} else if rl.Disk != "" {
+			result.Disk = rl.Disk // Fall back to legacy global
+		} else {
+			result.Disk = defaults.Disk
+		}
+		return result
+	}
+
+	// Fall back to legacy global limits if provided
+	result := PhaseResourceLimits{}
+	if rl.CPU != "" {
+		result.CPU = rl.CPU
+	} else {
+		result.CPU = defaults.CPU
+	}
+	if rl.Memory != "" {
+		result.Memory = rl.Memory
+	} else {
+		result.Memory = defaults.Memory
+	}
+	if rl.Disk != "" {
+		result.Disk = rl.Disk
+	} else {
+		result.Disk = defaults.Disk
+	}
+	return result
 }
 
 // Job represents a build job with its current state

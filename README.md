@@ -284,7 +284,11 @@ Jobs can specify custom resource limits using the optional `resource_limits` par
 
 ### Custom Resource Configuration
 
-You can override these defaults by including a `resource_limits` object in your job submission:
+You can override the default resource limits in two ways:
+
+#### 1. Global Resource Limits (Legacy)
+
+Apply the same resource limits to all phases:
 
 ```json
 {
@@ -303,7 +307,68 @@ You can override these defaults by including a `resource_limits` object in your 
 }
 ```
 
-**Note**: Resource limits apply to all phases (build, test, publish). Consider your workload requirements when setting custom limits.
+#### 2. Per-Phase Resource Limits (Recommended)
+
+Specify different resource limits for each phase of the build process:
+
+```json
+{
+  "job_config": {
+    "owner": "myorg",
+    "repo_url": "https://github.com/myorg/myapp.git",
+    "image_name": "myapp",
+    "image_tags": ["latest"],
+    "registry_url": "registry.cluster:5000/myapp",
+    "resource_limits": {
+      "build": {
+        "cpu": "4000",     // 4000 MHz (4 CPU cores) - build needs more resources
+        "memory": "8192",  // 8192 MB (8 GB RAM)
+        "disk": "40960"    // 40960 MB (40 GB disk)
+      },
+      "test": {
+        "cpu": "1500",     // 1500 MHz (1.5 CPU cores)
+        "memory": "3072",  // 3072 MB (3 GB RAM)
+        "disk": "10240"    // 10240 MB (10 GB disk)
+      },
+      "publish": {
+        "cpu": "800",      // 800 MHz
+        "memory": "1536",  // 1536 MB (1.5 GB RAM)
+        "disk": "5120"     // 5120 MB (5 GB disk)
+      }
+    }
+  }
+}
+```
+
+#### 3. Mixed Configuration
+
+You can combine global limits with per-phase overrides:
+
+```json
+{
+  "job_config": {
+    "resource_limits": {
+      "cpu": "2000",     // Global fallback for all phases
+      "memory": "4096",  // Global fallback for all phases
+      "build": {
+        "cpu": "6000"    // Override only CPU for build phase
+        // Memory and disk will use global values
+      },
+      "test": {
+        "memory": "2048" // Override only memory for test phase
+        // CPU and disk will use global values
+      }
+    }
+  }
+}
+```
+
+**Resource Resolution Priority:**
+1. **Per-phase specific values** (highest priority)
+2. **Global/legacy values** (fallback)
+3. **System defaults** (final fallback)
+
+This allows fine-grained control where resource-intensive build phases can have higher limits while test and publish phases use more conservative allocations.
 
 ## Usage Examples
 

@@ -141,18 +141,75 @@ func GetTools() []Tool {
 					},
 					"resource_limits": map[string]interface{}{
 						"type": "object",
+						"description": "Resource limits for the build job. Supports both legacy global limits and per-phase limits.",
 						"properties": map[string]interface{}{
+							// Legacy global limits (for backward compatibility)
 							"cpu": map[string]interface{}{
 								"type":        "string",
-								"description": "CPU limit in MHz (e.g., '1000')",
+								"description": "Global CPU limit in MHz (e.g., '1000') - applies to all phases if per-phase not specified",
 							},
 							"memory": map[string]interface{}{
 								"type":        "string",
-								"description": "Memory limit in MB (e.g., '2048')",
+								"description": "Global memory limit in MB (e.g., '2048') - applies to all phases if per-phase not specified",
 							},
 							"disk": map[string]interface{}{
 								"type":        "string",
-								"description": "Disk limit in MB (e.g., '10240')",
+								"description": "Global disk limit in MB (e.g., '10240') - applies to all phases if per-phase not specified",
+							},
+							// Per-phase resource limits
+							"build": map[string]interface{}{
+								"type": "object",
+								"description": "Resource limits for the build phase",
+								"properties": map[string]interface{}{
+									"cpu": map[string]interface{}{
+										"type":        "string",
+										"description": "CPU limit in MHz (e.g., '2000')",
+									},
+									"memory": map[string]interface{}{
+										"type":        "string",
+										"description": "Memory limit in MB (e.g., '4096')",
+									},
+									"disk": map[string]interface{}{
+										"type":        "string",
+										"description": "Disk limit in MB (e.g., '20480')",
+									},
+								},
+							},
+							"test": map[string]interface{}{
+								"type": "object",
+								"description": "Resource limits for the test phase",
+								"properties": map[string]interface{}{
+									"cpu": map[string]interface{}{
+										"type":        "string",
+										"description": "CPU limit in MHz (e.g., '1000')",
+									},
+									"memory": map[string]interface{}{
+										"type":        "string",
+										"description": "Memory limit in MB (e.g., '2048')",
+									},
+									"disk": map[string]interface{}{
+										"type":        "string",
+										"description": "Disk limit in MB (e.g., '5120')",
+									},
+								},
+							},
+							"publish": map[string]interface{}{
+								"type": "object",
+								"description": "Resource limits for the publish phase",
+								"properties": map[string]interface{}{
+									"cpu": map[string]interface{}{
+										"type":        "string",
+										"description": "CPU limit in MHz (e.g., '500')",
+									},
+									"memory": map[string]interface{}{
+										"type":        "string",
+										"description": "Memory limit in MB (e.g., '1024')",
+									},
+									"disk": map[string]interface{}{
+										"type":        "string",
+										"description": "Disk limit in MB (e.g., '2048')",
+									},
+								},
 							},
 						},
 					},

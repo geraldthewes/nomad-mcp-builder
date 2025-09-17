@@ -14,22 +14,19 @@ import (
 func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	jobID := fmt.Sprintf("build-%s", job.ID)
 	
-	// Resource limits
-	cpu := 1000 // Default 1000 MHz
-	memory := 2048 // Default 2048 MB
-	disk := 10240 // Default 10 GB
-	
-	if job.Config.ResourceLimits != nil {
-		if job.Config.ResourceLimits.CPU != "" {
-			fmt.Sscanf(job.Config.ResourceLimits.CPU, "%d", &cpu)
-		}
-		if job.Config.ResourceLimits.Memory != "" {
-			fmt.Sscanf(job.Config.ResourceLimits.Memory, "%d", &memory)
-		}
-		if job.Config.ResourceLimits.Disk != "" {
-			fmt.Sscanf(job.Config.ResourceLimits.Disk, "%d", &disk)
-		}
+	// Resource limits with defaults for build phase
+	buildDefaults := types.PhaseResourceLimits{
+		CPU:    "1000", // Default 1000 MHz
+		Memory: "2048", // Default 2048 MB
+		Disk:   "10240", // Default 10 GB
 	}
+
+	buildLimits := job.Config.ResourceLimits.GetBuildLimits(buildDefaults)
+
+	var cpu, memory, disk int
+	fmt.Sscanf(buildLimits.CPU, "%d", &cpu)
+	fmt.Sscanf(buildLimits.Memory, "%d", &memory)
+	fmt.Sscanf(buildLimits.Disk, "%d", &disk)
 	
 	// Create temporary image name
 	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
@@ -184,19 +181,19 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nomadapi.Job, error) {
 	var testJobs []*nomadapi.Job
 	
-	// Resource limits for test jobs
-	cpu := 500    // Less than build phase since tests are simpler
-	memory := 1024
-	disk := 2048  // Tests need minimal disk
-	
-	if job.Config.ResourceLimits != nil {
-		if job.Config.ResourceLimits.CPU != "" {
-			fmt.Sscanf(job.Config.ResourceLimits.CPU, "%d", &cpu)
-		}
-		if job.Config.ResourceLimits.Memory != "" {
-			fmt.Sscanf(job.Config.ResourceLimits.Memory, "%d", &memory)
-		}
+	// Resource limits with defaults for test phase
+	testDefaults := types.PhaseResourceLimits{
+		CPU:    "500",  // Less than build phase since tests are simpler
+		Memory: "1024", // 1024 MB
+		Disk:   "2048", // Tests need minimal disk
 	}
+
+	testLimits := job.Config.ResourceLimits.GetTestLimits(testDefaults)
+
+	var cpu, memory, disk int
+	fmt.Sscanf(testLimits.CPU, "%d", &cpu)
+	fmt.Sscanf(testLimits.Memory, "%d", &memory)
+	fmt.Sscanf(testLimits.Disk, "%d", &disk)
 	
 	// Create temporary image name - this is the image built in the build phase
 	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
@@ -382,10 +379,19 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	jobID := fmt.Sprintf("publish-%s", job.ID)
 	
-	// Resource limits (minimal for publish phase)
-	cpu := 500
-	memory := 1024
-	disk := 2048
+	// Resource limits with defaults for publish phase
+	publishDefaults := types.PhaseResourceLimits{
+		CPU:    "500",  // Minimal for publish phase
+		Memory: "1024", // 1024 MB
+		Disk:   "2048", // 2048 MB
+	}
+
+	publishLimits := job.Config.ResourceLimits.GetPublishLimits(publishDefaults)
+
+	var cpu, memory, disk int
+	fmt.Sscanf(publishLimits.CPU, "%d", &cpu)
+	fmt.Sscanf(publishLimits.Memory, "%d", &memory)
+	fmt.Sscanf(publishLimits.Disk, "%d", &disk)
 	
 	// Create temporary and final image names
 	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
