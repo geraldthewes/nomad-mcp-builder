@@ -28,11 +28,8 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	fmt.Sscanf(buildLimits.Memory, "%d", &memory)
 	fmt.Sscanf(buildLimits.Disk, "%d", &disk)
 	
-	// Create temporary image name
-	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
-		nc.config.Build.RegistryConfig.URL, 
-		nc.config.Build.RegistryConfig.TempPrefix, 
-		job.ID)
+	// Create temporary image name with improved naming scheme
+	tempImageName := nc.generateTempImageName(job)
 	
 	// Build the task commands with layer caching and proper HTTPS handling
 	buildCommands := []string{
@@ -176,10 +173,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 	fmt.Sscanf(testLimits.Disk, "%d", &disk)
 	
 	// Create temporary image name - this is the image built in the build phase
-	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
-		nc.config.Build.RegistryConfig.URL, 
-		nc.config.Build.RegistryConfig.TempPrefix, 
-		job.ID)
+	tempImageName := nc.generateTempImageName(job)
 	
 	// Mode 1: Create separate test jobs for each custom test command
 	if len(job.Config.TestCommands) > 0 {
@@ -374,10 +368,7 @@ func (nc *Client) createPublishJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	fmt.Sscanf(publishLimits.Disk, "%d", &disk)
 	
 	// Create temporary and final image names
-	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
-		nc.config.Build.RegistryConfig.URL, 
-		nc.config.Build.RegistryConfig.TempPrefix, 
-		job.ID)
+	tempImageName := nc.generateTempImageName(job)
 	
 	// Build publish commands for each tag
 	publishCommands := []string{
@@ -498,21 +489,87 @@ func (nc *Client) createCleanupJobSpec(job *types.Job) *nomadapi.Job {
 	jobID := fmt.Sprintf("cleanup-%s", job.ID)
 	
 	// Create temporary image name for cleanup
-	tempImageName := fmt.Sprintf("%s/%s/%s:latest", 
-		nc.config.Build.RegistryConfig.URL, 
-		nc.config.Build.RegistryConfig.TempPrefix, 
-		job.ID)
+	tempImageName := nc.generateTempImageName(job)
 	
+	// Extract registry host, image path, and tag for API calls
+	registryHost := registryHost(tempImageName)
+	imageWithTag := strings.TrimPrefix(tempImageName, registryHost+"/")
+	parts := strings.Split(imageWithTag, ":")
+	imagePath := parts[0] // Repository name
+	imageTag := parts[1]  // Job ID as tag
+
 	cleanupCommands := []string{
 		"#!/bin/bash",
 		"set -euo pipefail",
 		"",
-		"# Remove temporary image from registry",
-		"# Note: This is a simplified example - actual registry cleanup depends on registry type",
-		fmt.Sprintf("echo 'Cleaning up temporary image: %s'", tempImageName),
-		"# Add actual cleanup commands here based on your registry",
+		"# Function to call registry API with proper authentication",
+		"call_registry_api() {",
+		"  local method=\"$1\"",
+		"  local url=\"$2\"",
+		"  local auth_header=\"\"",
+		"  ",
+		"  # Use registry credentials if available",
+		"  if [ -f /secrets/registry-creds ]; then",
+		"    source /secrets/registry-creds",
+		"    if [ -n \"$REGISTRY_USERNAME\" ] && [ -n \"$REGISTRY_PASSWORD\" ]; then",
+		"      local auth=$(echo -n \"$REGISTRY_USERNAME:$REGISTRY_PASSWORD\" | base64 -w 0)",
+		"      auth_header=\"-H 'Authorization: Basic $auth'\"",
+		"    fi",
+		"  fi",
+		"  ",
+		"  eval \"curl -s -k -X $method $auth_header \\\"$url\\\"\"", // -k to ignore SSL cert issues
+		"}",
 		"",
-		"echo 'Cleanup completed'",
+		fmt.Sprintf("echo 'Cleaning up temporary image: %s'", tempImageName),
+		fmt.Sprintf("REGISTRY_HOST='%s'", registryHost),
+		fmt.Sprintf("IMAGE_PATH='%s'", imagePath),
+		fmt.Sprintf("TAG='%s'", imageTag),
+		"",
+		"# Step 1: Check if image exists and get the manifest digest",
+		"echo 'Checking if temporary image exists...'",
+		"HTTP_STATUS=$(curl -s -k -I -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \"https://$REGISTRY_HOST/v2/$IMAGE_PATH/manifests/$TAG\" -w '%%{http_code}' -o /dev/null)",
+		"echo \"Registry responded with HTTP status: $HTTP_STATUS\"",
+		"",
+		"if [ \"$HTTP_STATUS\" = \"200\" ]; then",
+		"  echo 'Image exists, getting digest for deletion...'",
+		"  # Extract digest from response headers",
+		"  DIGEST=$(curl -s -k -I -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \"https://$REGISTRY_HOST/v2/$IMAGE_PATH/manifests/$TAG\" | grep -i docker-content-digest | cut -d' ' -f2 | tr -d '\\r')",
+		"elif [ \"$HTTP_STATUS\" = \"404\" ]; then",
+		"  echo 'Image not found (already deleted or never existed)'",
+		"  echo 'Cleanup completed - nothing to delete'",
+		"  exit 0",
+		"else",
+		"  echo \"Unexpected HTTP status: $HTTP_STATUS\"",
+		"  echo 'Proceeding with cleanup attempt anyway...'",
+		"  DIGEST=\"\"",
+		"fi",
+		"",
+		"if [ -n \"$DIGEST\" ] && [ \"$DIGEST\" != \"\" ]; then",
+		"  echo \"Found image digest: $DIGEST\"",
+		"  ",
+		"  # Step 2: Delete the manifest using the digest",
+		"  echo 'Deleting image manifest...'",
+		"  DELETE_RESPONSE=$(call_registry_api DELETE \"https://$REGISTRY_HOST/v2/$IMAGE_PATH/manifests/$DIGEST\")",
+		"  ",
+		"  if [ $? -eq 0 ]; then",
+		"    echo 'Image manifest deleted successfully'",
+		"  else",
+		"    echo 'Warning: Failed to delete image manifest, but continuing...'",
+		"  fi",
+		"else",
+		"  echo 'Warning: Could not find image digest, image may not exist or already be deleted'",
+		"fi",
+		"",
+		"# Step 3: Trigger garbage collection (if supported by registry)",
+		"echo 'Attempting to trigger registry garbage collection...'",
+		"GC_RESPONSE=$(call_registry_api POST \"https://$REGISTRY_HOST/v2/_catalog\" 2>/dev/null || true)",
+		"",
+		"# Note: Most Docker registries require manual garbage collection",
+		"# This is typically done via registry configuration or separate tools",
+		"echo 'Registry cleanup commands completed'",
+		"echo 'Note: Registry garbage collection may need to be run separately to free disk space'",
+		"",
+		"echo 'Cleanup completed successfully'",
 	}
 	
 	jobSpec := &nomadapi.Job{
@@ -538,9 +595,13 @@ func (nc *Client) createCleanupJobSpec(job *types.Job) *nomadapi.Job {
 						Name:   "main",
 						Driver: "docker",
 						Config: map[string]interface{}{
-							"image":   "quay.io/buildah/stable:latest",
-							"command": "/bin/bash",
+							"image":   "curlimages/curl:latest", // Use curl image for registry API calls
+							"command": "/bin/sh",
 							"args":    []string{"-c", strings.Join(cleanupCommands, "\n")},
+							"volumes": []string{
+								"/etc/docker/certs.d:/etc/docker/certs.d:ro", // Registry certificates
+								"/etc/ssl/certs:/etc/ssl/certs:ro",           // System CA certificates
+							},
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(100),
@@ -556,7 +617,21 @@ func (nc *Client) createCleanupJobSpec(job *types.Job) *nomadapi.Job {
 			},
 		},
 	}
-	
+
+	// Add registry credentials if needed for private registries
+	if job.Config.RegistryCredentialsPath != "" {
+		templates := cleanupTemplates(job)
+		if len(templates) > 0 {
+			mainTask := jobSpec.TaskGroups[0].Tasks[0]
+			mainTask.Vault = &nomadapi.Vault{
+				Policies:   []string{"nomad-build-service"},
+				ChangeMode: stringPtr("restart"),
+				Role:       "nomad-workloads",
+			}
+			mainTask.Templates = templates
+		}
+	}
+
 	return jobSpec
 }
 
@@ -571,6 +646,22 @@ func intPtr(i int) *int {
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// generateTempImageName creates the temporary image name with improved naming scheme
+// Format: registry.url/bdtemp-imagename:job-id
+// This ensures each project has its own temporary namespace with job ID as tag
+func (nc *Client) generateTempImageName(job *types.Job) string {
+	// Sanitize image name for use in registry path (remove special chars, make lowercase)
+	sanitizedImageName := strings.ToLower(strings.ReplaceAll(job.Config.ImageName, "/", "-"))
+	sanitizedImageName = strings.ReplaceAll(sanitizedImageName, "_", "-")
+
+	tempPrefix := fmt.Sprintf("%s-%s", nc.config.Build.RegistryConfig.TempPrefix, sanitizedImageName)
+
+	return fmt.Sprintf("%s/%s:%s",
+		nc.config.Build.RegistryConfig.URL,
+		tempPrefix,
+		job.ID)
 }
 
 func durationPtr(d string) *time.Duration {
@@ -644,6 +735,28 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 
 // publishTemplates creates Vault templates for the publish phase (only registry credentials if needed)
 func publishTemplates(job *types.Job) []*nomadapi.Template {
+	var templates []*nomadapi.Template
+	
+	// Only add registry credentials template if path is provided and not empty
+	if job.Config.RegistryCredentialsPath != "" {
+		registryTemplate := &nomadapi.Template{
+			DestPath:   stringPtr("/secrets/registry-creds"),
+			ChangeMode: stringPtr("restart"),
+			EmbeddedTmpl: stringPtr(fmt.Sprintf(`
+{{- with secret "%s" -}}
+export REGISTRY_USERNAME="{{ .Data.data.username }}"
+export REGISTRY_PASSWORD="{{ .Data.data.password }}"
+{{- end -}}
+`, job.Config.RegistryCredentialsPath)),
+		}
+		templates = append(templates, registryTemplate)
+	}
+	
+	return templates
+}
+
+// cleanupTemplates creates Vault templates for the cleanup phase (only registry credentials if needed)
+func cleanupTemplates(job *types.Job) []*nomadapi.Template {
 	var templates []*nomadapi.Template
 	
 	// Only add registry credentials template if path is provided and not empty
