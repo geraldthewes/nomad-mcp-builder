@@ -354,6 +354,12 @@ func convertMCPArgsToJobConfig(args map[string]interface{}) *types.JobConfig {
 		jobConfig.TestEntryPoint = testEntryPoint
 	}
 
+	// Parse resource limits (this is what's missing from the actual mcpSubmitJob!)
+	if resourceLimitsInterface, ok := args["resource_limits"]; ok {
+		resourceLimits := parseResourceLimitsFromMCP(resourceLimitsInterface)
+		jobConfig.ResourceLimits = resourceLimits
+	}
+
 	return &jobConfig
 }
 
@@ -388,4 +394,76 @@ func validateJobConfigStrict(config *types.JobConfig) error {
 	}
 
 	return nil
+}
+
+// parseResourceLimitsFromMCP converts the MCP resource_limits argument to internal types
+func parseResourceLimitsFromMCP(limitsInterface interface{}) *types.ResourceLimits {
+	limitsMap, ok := limitsInterface.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	resourceLimits := &types.ResourceLimits{}
+
+	// Parse legacy global limits
+	if cpu, ok := limitsMap["cpu"].(string); ok {
+		resourceLimits.CPU = cpu
+	}
+	if memory, ok := limitsMap["memory"].(string); ok {
+		resourceLimits.Memory = memory
+	}
+	if disk, ok := limitsMap["disk"].(string); ok {
+		resourceLimits.Disk = disk
+	}
+
+	// Parse per-phase limits
+	if buildInterface, ok := limitsMap["build"]; ok {
+		if buildMap, ok := buildInterface.(map[string]interface{}); ok {
+			build := &types.PhaseResourceLimits{}
+			if cpu, ok := buildMap["cpu"].(string); ok {
+				build.CPU = cpu
+			}
+			if memory, ok := buildMap["memory"].(string); ok {
+				build.Memory = memory
+			}
+			if disk, ok := buildMap["disk"].(string); ok {
+				build.Disk = disk
+			}
+			resourceLimits.Build = build
+		}
+	}
+
+	if testInterface, ok := limitsMap["test"]; ok {
+		if testMap, ok := testInterface.(map[string]interface{}); ok {
+			test := &types.PhaseResourceLimits{}
+			if cpu, ok := testMap["cpu"].(string); ok {
+				test.CPU = cpu
+			}
+			if memory, ok := testMap["memory"].(string); ok {
+				test.Memory = memory
+			}
+			if disk, ok := testMap["disk"].(string); ok {
+				test.Disk = disk
+			}
+			resourceLimits.Test = test
+		}
+	}
+
+	if publishInterface, ok := limitsMap["publish"]; ok {
+		if publishMap, ok := publishInterface.(map[string]interface{}); ok {
+			publish := &types.PhaseResourceLimits{}
+			if cpu, ok := publishMap["cpu"].(string); ok {
+				publish.CPU = cpu
+			}
+			if memory, ok := publishMap["memory"].(string); ok {
+				publish.Memory = memory
+			}
+			if disk, ok := publishMap["disk"].(string); ok {
+				publish.Disk = disk
+			}
+			resourceLimits.Publish = publish
+		}
+	}
+
+	return resourceLimits
 }

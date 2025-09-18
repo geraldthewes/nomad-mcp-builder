@@ -370,6 +370,60 @@ You can combine global limits with per-phase overrides:
 
 This allows fine-grained control where resource-intensive build phases can have higher limits while test and publish phases use more conservative allocations.
 
+### Recommended Resource Configurations by Application Type
+
+#### 🚀 Simple Applications (Node.js, Python, Go)
+**Global limits** (apply to all phases):
+```json
+"resource_limits": {
+  "cpu": "1000",     // 1 GHz CPU
+  "memory": "2048",  // 2 GB RAM
+  "disk": "10240"    // 10 GB disk
+}
+```
+
+#### 🔧 Complex Applications (Java, .NET, C++)
+**Global limits** for moderate complexity:
+```json
+"resource_limits": {
+  "cpu": "2000",     // 2 GHz CPU
+  "memory": "4096",  // 4 GB RAM
+  "disk": "20480"    // 20 GB disk
+}
+```
+
+#### 🤖 Large Applications (ML/Data, Multi-stage builds)
+**Per-phase limits** for maximum control:
+```json
+"resource_limits": {
+  "build": {
+    "cpu": "4000",     // 4 GHz CPU for compilation
+    "memory": "8192",  // 8 GB RAM for dependencies
+    "disk": "40960"    // 40 GB for large packages
+  },
+  "test": {
+    "cpu": "2000",     // 2 GHz CPU for tests
+    "memory": "4096",  // 4 GB RAM for test data
+    "disk": "20480"    // 20 GB for test artifacts
+  },
+  "publish": {
+    "cpu": "1000",     // 1 GHz CPU for registry push
+    "memory": "2048",  // 2 GB RAM for image layers
+    "disk": "10240"    // 10 GB for temporary files
+  }
+}
+```
+
+#### ⚡ Resource Guidelines by Image Size
+- **Small images** (< 500 MB): Use simple application settings
+- **Medium images** (500 MB - 2 GB): Use complex application settings
+- **Large images** (> 2 GB): Use large application settings with per-phase limits
+
+#### 💡 Performance Tips
+- **CPU**: Build phase typically needs 2-4x more CPU than test/publish phases
+- **Memory**: Increase memory for applications with many dependencies (Node.js, Maven)
+- **Disk**: Allow extra disk space for layer caching (improves subsequent build performance)
+
 ## Usage Examples
 
 ### Submit a Build Job

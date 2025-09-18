@@ -141,73 +141,85 @@ func GetTools() []Tool {
 					},
 					"resource_limits": map[string]interface{}{
 						"type": "object",
-						"description": "Resource limits for the build job. Supports both legacy global limits and per-phase limits.",
+						"description": "Resource limits for the build job. Supports both legacy global limits and per-phase limits. Units: CPU in MHz, Memory/Disk in MB. Recommended minimums: Simple apps (1000 MHz, 2048 MB, 10240 MB), Complex builds (2000 MHz, 4096 MB, 20480 MB), Large ML/Data images (4000+ MHz, 8192+ MB, 40960+ MB).",
 						"properties": map[string]interface{}{
 							// Legacy global limits (for backward compatibility)
 							"cpu": map[string]interface{}{
 								"type":        "string",
-								"description": "Global CPU limit in MHz (e.g., '1000') - applies to all phases if per-phase not specified",
+								"description": "Global CPU limit in MHz (e.g., '2000' for 2 GHz). Applies to all phases if per-phase not specified. Minimum: 500, Recommended: 1000-4000 depending on complexity.",
+								"examples":    []string{"1000", "2000", "4000"},
 							},
 							"memory": map[string]interface{}{
 								"type":        "string",
-								"description": "Global memory limit in MB (e.g., '2048') - applies to all phases if per-phase not specified",
+								"description": "Global memory limit in MB (e.g., '4096' for 4 GB). Applies to all phases if per-phase not specified. Minimum: 1024, Recommended: 2048-8192 depending on image size.",
+								"examples":    []string{"2048", "4096", "8192"},
 							},
 							"disk": map[string]interface{}{
 								"type":        "string",
-								"description": "Global disk limit in MB (e.g., '10240') - applies to all phases if per-phase not specified",
+								"description": "Global disk limit in MB (e.g., '20480' for 20 GB). Applies to all phases if per-phase not specified. Minimum: 5120, Recommended: 10240-40960 depending on dependencies.",
+								"examples":    []string{"10240", "20480", "40960"},
 							},
 							// Per-phase resource limits
 							"build": map[string]interface{}{
 								"type": "object",
-								"description": "Resource limits for the build phase",
+								"description": "Resource limits for the build phase (compiling, dependency installation). Generally needs the most resources due to compilation and package downloads.",
 								"properties": map[string]interface{}{
 									"cpu": map[string]interface{}{
 										"type":        "string",
-										"description": "CPU limit in MHz (e.g., '2000')",
+										"description": "CPU limit in MHz. Recommended: 2000-4000 for complex builds, 1000 for simple apps.",
+										"examples":    []string{"1000", "2000", "4000"},
 									},
 									"memory": map[string]interface{}{
 										"type":        "string",
-										"description": "Memory limit in MB (e.g., '4096')",
+										"description": "Memory limit in MB. Recommended: 4096-8192 for complex builds, 2048 for simple apps.",
+										"examples":    []string{"2048", "4096", "8192"},
 									},
 									"disk": map[string]interface{}{
 										"type":        "string",
-										"description": "Disk limit in MB (e.g., '20480')",
+										"description": "Disk limit in MB. Recommended: 20480-40960 for builds with many dependencies, 10240 for simple apps.",
+										"examples":    []string{"10240", "20480", "40960"},
 									},
 								},
 							},
 							"test": map[string]interface{}{
 								"type": "object",
-								"description": "Resource limits for the test phase",
+								"description": "Resource limits for the test phase (running tests in the built image). Usually needs moderate resources.",
 								"properties": map[string]interface{}{
 									"cpu": map[string]interface{}{
 										"type":        "string",
-										"description": "CPU limit in MHz (e.g., '1000')",
+										"description": "CPU limit in MHz. Recommended: 1000-2000 for most applications.",
+										"examples":    []string{"1000", "1500", "2000"},
 									},
 									"memory": map[string]interface{}{
 										"type":        "string",
-										"description": "Memory limit in MB (e.g., '2048')",
+										"description": "Memory limit in MB. Recommended: 2048-4096 depending on test requirements.",
+										"examples":    []string{"2048", "3072", "4096"},
 									},
 									"disk": map[string]interface{}{
 										"type":        "string",
-										"description": "Disk limit in MB (e.g., '5120')",
+										"description": "Disk limit in MB. Recommended: 5120-10240 for test artifacts and temporary files.",
+										"examples":    []string{"5120", "8192", "10240"},
 									},
 								},
 							},
 							"publish": map[string]interface{}{
 								"type": "object",
-								"description": "Resource limits for the publish phase",
+								"description": "Resource limits for the publish phase (pushing final images to registry). Generally needs minimal resources.",
 								"properties": map[string]interface{}{
 									"cpu": map[string]interface{}{
 										"type":        "string",
-										"description": "CPU limit in MHz (e.g., '500')",
+										"description": "CPU limit in MHz. Recommended: 500-1000 (lightweight registry operations).",
+										"examples":    []string{"500", "750", "1000"},
 									},
 									"memory": map[string]interface{}{
 										"type":        "string",
-										"description": "Memory limit in MB (e.g., '1024')",
+										"description": "Memory limit in MB. Recommended: 1024-2048 (mainly for image manipulation).",
+										"examples":    []string{"1024", "1536", "2048"},
 									},
 									"disk": map[string]interface{}{
 										"type":        "string",
-										"description": "Disk limit in MB (e.g., '2048')",
+										"description": "Disk limit in MB. Recommended: 2048-5120 (temporary space for image layers).",
+										"examples":    []string{"2048", "3072", "5120"},
 									},
 								},
 							},
