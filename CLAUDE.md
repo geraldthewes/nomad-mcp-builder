@@ -134,29 +134,51 @@ make nomad-restart
 
 ### Testing Your Changes
 
-**CRITICAL**: After deploying via the above workflow, you MUST immediately test that your changes work by submitting a test build job.
+**CRITICAL**: After deploying via the above workflow, you MUST immediately test that your changes work using the proper testing flow.
 
-#### Step 1: Find the Service URL
+#### Required Testing Flow
 
-The service registers itself in Consul with dynamic ports. Find the current URL:
+**ALWAYS follow this exact sequence after making changes:**
+
+1. **Check cluster health and prerequisites:**
+   ```bash
+   # Verify cluster is healthy
+   nomad status                    # Nomad cluster running
+   consul members                  # Consul cluster healthy
+   vault status                    # Vault unsealed
+   ```
+
+2. **Deploy the latest version:**
+   ```bash
+   # Build and push to cluster registry
+   REGISTRY_URL=registry.cluster:5000 make docker-push
+
+   # Restart service to pull latest image
+   make nomad-restart
+   ```
+
+3. **Run integration tests (PREFERRED METHOD):**
+   ```bash
+   # Run all tests including integration test
+   go test ./...
+   ```
+
+   **Expected Results:**
+   - All unit tests pass (17 tests)
+   - Integration test passes (~15-25 seconds duration)
+   - Integration test validates complete build-test-publish pipeline
+   - Tests run against the newly deployed service
+
+#### Alternative Manual Testing (Only if integration tests fail)
+
+If integration tests fail and you need to debug manually:
 
 ```bash
-# Method 1: Check Consul service registry
+# Find service URL
 curl -s http://10.0.1.12:8500/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
 
-# Method 2: Check Nomad allocation 
-nomad job status nomad-build-service  # Get allocation ID
-nomad alloc status <alloc-id>         # Look for "Allocation Addresses" section
-```
-
-#### Step 2: Submit Test Build Job
-
-Use this exact test command with the discovered URL:
-
-```bash
-# Replace <SERVICE_URL> with the URL from Step 1, or use environment variable
-SERVICE_URL=${SERVICE_URL:-$(curl -s http://${CONSUL_HTTP_ADDR:-10.0.1.12:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')}
-
+# Submit manual test job
+SERVICE_URL=<discovered-url>
 curl -X POST http://${SERVICE_URL}/mcp/submitJob \
   -H "Content-Type: application/json" \
   -d '{
@@ -172,7 +194,7 @@ curl -X POST http://${SERVICE_URL}/mcp/submitJob \
   }'
 ```
 
-#### Step 3: Monitor Job Progress
+#### Monitor Job Progress (Manual Testing Only)
 
 ```bash
 # Get the job ID from the response and monitor it
@@ -192,6 +214,11 @@ curl http://${SERVICE_URL}/mcp/job/<job-id>/logs
 
 **CRITICAL**: After implementing any changes or completing tasks, you MUST run tests to verify functionality.
 
+**IMPORTANT**: Integration tests require the service to be deployed first. Always follow the complete workflow:
+
+1. **Deploy first** (see "Testing Your Changes" section above)
+2. **Then run tests** (below)
+
 ### Quick Test Command
 
 From the **repository root directory**, run all tests:
@@ -202,7 +229,7 @@ go test ./...
 
 This command will:
 - Run all unit tests (17 tests)
-- Run integration tests (1 end-to-end test)
+- Run integration tests (1 end-to-end test against deployed service)
 - Verify MCP tool loading from YAML resources
 - Test the complete build-test-publish pipeline
 
