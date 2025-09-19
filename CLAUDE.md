@@ -107,6 +107,9 @@ The project uses **semantic versioning** (MAJOR.MINOR.PATCH) with automatic patc
 - **Minor versions (0.X.0)**: Manual increment when you specify
 - **Major versions (X.0.0)**: Manual increment when you specify
 
+Please insure each build increases the Patch level
+
+
 **Version Commands:**
 ```bash
 # Show current version info

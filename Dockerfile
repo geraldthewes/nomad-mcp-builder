@@ -44,6 +44,9 @@ WORKDIR /app
 # Copy the binary from builder
 COPY --from=builder --chown=buildservice:buildservice /app/nomad-build-service .
 
+# Copy resources directory for MCP tools
+COPY --from=builder --chown=buildservice:buildservice /app/resources ./resources
+
 # Switch to non-root user
 USER buildservice
 

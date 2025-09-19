@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -77,6 +79,161 @@ func TestMCPServerIntegration(t *testing.T) {
 	t.Run("GetStatus", testGetStatus(cfg))
 	t.Run("GetLogs", testGetLogs(cfg))
 	t.Run("HealthCheck", testHealthCheck(cfg))
+}
+
+func getServiceURL(t *testing.T) string {
+	// Try to discover service URL via Consul
+	serviceURL, err := discoverServiceURL()
+	if err != nil {
+		t.Logf("Failed to discover service via Consul: %v", err)
+		return ""
+	}
+	return serviceURL
+}
+
+
+func TestMCPToolsListAndDocumentation(t *testing.T) {
+	serviceURL := getServiceURL(t)
+	if serviceURL == "" {
+		t.Skip("Skipping MCP integration test: service not available")
+	}
+
+	// Test 1: Verify that tools are properly listed via MCP protocol
+	t.Run("MCPToolsList", func(t *testing.T) {
+		// Create MCP tools/list request
+		req := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]interface{}{},
+		}
+
+		// Send the request to the MCP stream endpoint
+		resp := makeMCPRequest(t, serviceURL+"/mcp/stream", req)
+
+		// Verify response structure
+		if resp["error"] != nil {
+			t.Fatalf("MCP tools/list request failed: %v", resp["error"])
+		}
+
+		result, ok := resp["result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected result to be an object, got %T", resp["result"])
+		}
+
+		tools, ok := result["tools"].([]interface{})
+		if !ok {
+			t.Fatalf("Expected tools to be an array, got %T", result["tools"])
+		}
+
+		// Verify we have tools
+		if len(tools) == 0 {
+			t.Fatal("Expected at least one tool to be returned, got none")
+		}
+
+		// Verify each tool has required fields
+		expectedTools := []string{"submitJob", "getStatus", "getLogs", "killJob", "cleanup", "getHistory", "purgeFailedJob"}
+		foundTools := make(map[string]bool)
+
+		for _, toolInterface := range tools {
+			tool, ok := toolInterface.(map[string]interface{})
+			if !ok {
+				t.Errorf("Expected tool to be an object, got %T", toolInterface)
+				continue
+			}
+
+			// Check required fields
+			name, hasName := tool["name"].(string)
+			description, hasDescription := tool["description"].(string)
+			inputSchema, hasSchema := tool["inputSchema"].(map[string]interface{})
+
+			if !hasName {
+				t.Errorf("Tool missing 'name' field: %+v", tool)
+				continue
+			}
+			if !hasDescription {
+				t.Errorf("Tool '%s' missing 'description' field", name)
+			}
+			if !hasSchema {
+				t.Errorf("Tool '%s' missing 'inputSchema' field", name)
+			}
+
+			// Verify description is not empty
+			if len(description) == 0 {
+				t.Errorf("Tool '%s' has empty description", name)
+			}
+
+			// Verify input schema has type
+			if schemaType, ok := inputSchema["type"].(string); !ok || schemaType == "" {
+				t.Errorf("Tool '%s' input schema missing or invalid 'type' field", name)
+			}
+
+			foundTools[name] = true
+			t.Logf("Found tool: %s with description length %d", name, len(description))
+		}
+
+		// Verify all expected tools are present
+		for _, expectedTool := range expectedTools {
+			if !foundTools[expectedTool] {
+				t.Errorf("Expected tool '%s' not found in tools list", expectedTool)
+			}
+		}
+
+		t.Logf("Successfully verified %d tools with proper documentation", len(tools))
+	})
+
+	// Test 2: Verify resource endpoints for documentation
+	t.Run("MCPResourcesList", func(t *testing.T) {
+		// Create MCP resources/list request
+		req := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      2,
+			"method":  "resources/list",
+			"params":  map[string]interface{}{},
+		}
+
+		resp := makeMCPRequest(t, serviceURL+"/mcp/stream", req)
+
+		// Resources might not be implemented yet, so just check if endpoint responds
+		if resp["error"] != nil {
+			t.Logf("Resources not yet implemented (expected): %v", resp["error"])
+		} else {
+			t.Logf("Resources endpoint responded successfully")
+		}
+	})
+}
+
+func makeMCPRequest(t *testing.T, url string, req map[string]interface{}) map[string]interface{} {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(httpResp.Body)
+		t.Fatalf("Expected status 200, got %d. Body: %s", httpResp.StatusCode, string(body))
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	return resp
 }
 
 func testSubmitJob(cfg *config.Config) func(*testing.T) {
