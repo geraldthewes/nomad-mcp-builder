@@ -99,16 +99,38 @@ Plan for:
 
 ## Development and Deployment Workflow
 
+### Versioning Strategy
+
+The project uses **semantic versioning** (MAJOR.MINOR.PATCH) with automatic patch incrementing:
+
+- **Patch versions (0.0.X)**: Automatically incremented on each deployment
+- **Minor versions (0.X.0)**: Manual increment when you specify
+- **Major versions (X.0.0)**: Manual increment when you specify
+
+**Version Commands:**
+```bash
+# Show current version info
+make version-info
+
+# Manual version bumps (when requested)
+make version-major MAJOR=1          # Creates v1.0.0
+make version-minor MINOR_VER=2      # Creates v0.2.0
+```
+
 ### Making Code Changes and Testing Fixes
 
 When making fixes to the codebase, follow this workflow to build, deploy, and test changes:
 
 1. **Make your code changes**
-2. **Build and push the Docker image:**
+2. **Build and push the Docker image (auto-increments patch version):**
    ```bash
-   make docker-push
+   REGISTRY_URL=registry.cluster:5000 make docker-push
    ```
-   This builds the image and pushes it to `registry.cluster:5000/nomad-build-service:latest`
+   This will:
+   - Build the Docker image with the next patch version (e.g., 0.0.5)
+   - Push it to `registry.cluster:5000/nomad-build-service:0.0.5`
+   - Create and push git tag `v0.0.5`
+   - Also tag as `latest` for compatibility
 
 3. **Deploy the updated service:**
    ```bash

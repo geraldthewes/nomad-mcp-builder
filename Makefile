@@ -3,7 +3,22 @@
 # Build variables
 BINARY_NAME=nomad-build-service
 IMAGE_NAME=nomad-build-service
-VERSION?=latest
+
+# Versioning - automatically increment patch version
+LATEST_TAG=$(shell git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -1)
+ifeq ($(LATEST_TAG),)
+	# No version tags exist, start with v0.0.1
+	VERSION?=0.0.1
+else
+	# Extract current version and increment patch
+	CURRENT_VERSION=$(shell echo $(LATEST_TAG) | sed 's/^v//')
+	MAJOR=$(shell echo $(CURRENT_VERSION) | cut -d. -f1)
+	MINOR=$(shell echo $(CURRENT_VERSION) | cut -d. -f2)
+	PATCH=$(shell echo $(CURRENT_VERSION) | cut -d. -f3)
+	NEXT_PATCH=$(shell echo $$(($(PATCH) + 1)))
+	VERSION?=$(MAJOR).$(MINOR).$(NEXT_PATCH)
+endif
+
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 GIT_COMMIT=$(shell git rev-parse --short HEAD)
 LDFLAGS=-ldflags "-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT}"
@@ -122,11 +137,12 @@ docker-build-multi: ## Build multi-platform Docker image
 	@echo "Building multi-platform Docker image..."
 	@docker buildx build --platform linux/amd64,linux/arm64 -t ${DOCKER_TAG} --push .
 
-docker-push: docker-build ## Push Docker image to registry
+docker-push: docker-build version-tag ## Push Docker image to registry and create version tag
 	@echo "Pushing Docker image to registry..."
 	@docker tag ${IMAGE_NAME}:${VERSION} ${DOCKER_TAG}
 	@docker push ${DOCKER_TAG}
 	@echo "Docker image pushed: ${DOCKER_TAG}"
+	@echo "Version v${VERSION} tagged and pushed to git"
 
 docker-run: ## Run Docker container locally
 	@echo "Running Docker container..."
@@ -209,6 +225,31 @@ health-check: ## Check service health
 metrics: ## Show metrics
 	@echo "Service metrics:"
 	@curl -s http://localhost:9090/metrics | grep -E "^(build_|test_|publish_|job_|concurrent_|total_|resource_|health_)"
+
+# Versioning targets
+version-info: ## Show current version information
+	@echo "Current version: ${VERSION}"
+	@echo "Latest git tag: ${LATEST_TAG}"
+	@echo "Build time: ${BUILD_TIME}"
+	@echo "Git commit: ${GIT_COMMIT}"
+
+version-tag: ## Create and push version tag
+	@echo "Creating version tag: v${VERSION}"
+	@git tag -a v${VERSION} -m "Release version ${VERSION}"
+	@git push origin v${VERSION}
+	@echo "Version v${VERSION} tagged and pushed"
+
+version-major: ## Set major version (use: make version-major MAJOR=1)
+	@if [ -z "$(MAJOR)" ]; then echo "Usage: make version-major MAJOR=X"; exit 1; fi
+	@echo "Setting major version to $(MAJOR).0.0"
+	@git tag -a v$(MAJOR).0.0 -m "Major release version $(MAJOR).0.0"
+	@git push origin v$(MAJOR).0.0
+
+version-minor: ## Set minor version (use: make version-minor MINOR=1)
+	@if [ -z "$(MINOR_VER)" ]; then echo "Usage: make version-minor MINOR_VER=X"; exit 1; fi
+	@echo "Setting minor version to $(MAJOR).$(MINOR_VER).0"
+	@git tag -a v$(MAJOR).$(MINOR_VER).0 -m "Minor release version $(MAJOR).$(MINOR_VER).0"
+	@git push origin v$(MAJOR).$(MINOR_VER).0
 
 # Installation targets
 install: build ## Install binary to system
