@@ -80,7 +80,7 @@ func GetTools() []Tool {
 	return []Tool{
 		{
 			Name:        "submitJob",
-			Description: "Submit a new Docker build job",
+			Description: "Submit a new Docker build job. IMPORTANT: This service runs on multiple build servers in a distributed cluster. Each server has its own build cache (Buildah layer cache), so consecutive builds may run on different servers with different cache states. If you need consistent build caching, consider this when troubleshooting build performance variations.",
 			InputSchema: ToolSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -245,7 +245,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        "getLogs",
-			Description: "Get logs from a build job",
+			Description: "Get logs from a build job. NOTE: Logs are captured at job completion but may be unavailable if Nomad's log garbage collection is aggressive. In that case, logs will be null but you can infer build success/failure from job status.",
 			InputSchema: ToolSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
