@@ -188,6 +188,73 @@ curl http://${SERVICE_URL}/mcp/job/<job-id>/logs
 
 **Do not assume your changes work without testing them immediately!**
 
+## Running Tests
+
+**CRITICAL**: After implementing any changes or completing tasks, you MUST run tests to verify functionality.
+
+### Quick Test Command
+
+From the **repository root directory**, run all tests:
+
+```bash
+go test ./...
+```
+
+This command will:
+- Run all unit tests (17 tests)
+- Run integration tests (1 end-to-end test)
+- Verify MCP tool loading from YAML resources
+- Test the complete build-test-publish pipeline
+
+### Test Structure
+
+- **Unit Tests**: `test/unit/` - Fast tests for individual components
+- **Integration Tests**: `test/integration/` - End-to-end tests requiring running services
+
+### Expected Results
+
+**All Passing Example:**
+```
+?       nomad-mcp-builder/cmd/server    [no test files]
+?       nomad-mcp-builder/internal/config       [no test files]
+?       nomad-mcp-builder/internal/mcp  [no test files]
+...
+ok      nomad-mcp-builder/test/integration      15.138s
+ok      nomad-mcp-builder/test/unit     0.014s
+```
+
+**Integration Test Success Indicators:**
+- ✅ Service discovery via Consul works
+- ✅ Complete build-test-publish workflow (15-20s duration)
+- ✅ All phases succeed (build → test → publish)
+- ✅ Job logs and metrics captured
+- ✅ MCP tools load correctly from YAML resources
+
+### When to Run Tests
+
+1. **After implementing new features**
+2. **Before committing changes**
+3. **When you think all tasks are complete**
+4. **After fixing bugs**
+5. **When modifying MCP tool definitions**
+
+### Troubleshooting Test Failures
+
+- **"tools directory not found"**: Resource loading path issue (should be auto-resolved)
+- **Integration test skips**: Consul/Nomad services not running
+- **Build failures**: Check that the service can connect to Nomad cluster
+
+### Verbose Test Output
+
+For detailed test information:
+```bash
+# Unit tests only
+go test -v ./test/unit
+
+# Integration tests only
+go test -v ./test/integration -timeout 30s
+```
+
 ## Dependencies
 
 Requires:

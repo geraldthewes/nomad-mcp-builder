@@ -1,0 +1,10 @@
+name: "getStatus"
+description: "Get the status of a build job"
+
+input_schema:
+  type: "object"
+  required: ["job_id"]
+  properties:
+    job_id:
+      type: "string"
+      description: "ID of the job to check"

@@ -85,6 +85,13 @@ cache/
 *.tmp
 *.temp
 
+# Go build artifacts
+test-build
+nomad-build-service
+
+# Development tools
+.serena/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
