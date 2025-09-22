@@ -117,6 +117,9 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 
 // UpdateJobStatus updates the job status by querying Nomad
 func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
+	// Check if tests are configured
+	skipTests := len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint
+	
 	// Check build job status
 	if job.BuildJobID != "" {
 		buildStatus, err := nc.getJobStatus(job.BuildJobID)
@@ -142,21 +145,33 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				}
 			}
 			
-			// Start test phase with a small delay to avoid Docker layer race conditions
-			if job.Status == types.StatusBuilding {
-				// Add a brief delay to ensure Docker daemon has finished cleaning up build layers
-				// This helps prevent "file exists" errors when test jobs try to pull the same image
-				nc.logger.WithField("job_id", job.ID).Info("Build completed, waiting 3 seconds before starting tests to avoid Docker layer conflicts")
-				time.Sleep(3 * time.Second)
-				
-				if err := nc.startTestPhase(job); err != nil {
-					job.Status = types.StatusFailed
-					job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
-					job.FinishedAt = &now
-					job.Metrics.JobEnd = &now
-				} else {
-					job.Status = types.StatusTesting
-					job.Metrics.TestStart = &now
+			if skipTests {
+				// No tests configured - build pushed directly to final tags, mark as succeeded
+				nc.logger.WithField("job_id", job.ID).Info("Build completed with no tests configured, marking job as succeeded")
+				job.Status = types.StatusSucceeded
+				job.FinishedAt = &now
+				job.Metrics.JobEnd = &now
+				// Calculate total duration
+				if job.Metrics.JobStart != nil {
+					job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
+				}
+			} else {
+				// Start test phase with a small delay to avoid Docker layer race conditions
+				if job.Status == types.StatusBuilding {
+					// Add a brief delay to ensure Docker daemon has finished cleaning up build layers
+					// This helps prevent "file exists" errors when test jobs try to pull the same image
+					nc.logger.WithField("job_id", job.ID).Info("Build completed, waiting 3 seconds before starting tests to avoid Docker layer conflicts")
+					time.Sleep(3 * time.Second)
+					
+					if err := nc.startTestPhase(job); err != nil {
+						job.Status = types.StatusFailed
+						job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
+						job.FinishedAt = &now
+						job.Metrics.JobEnd = &now
+					} else {
+						job.Status = types.StatusTesting
+						job.Metrics.TestStart = &now
+					}
 				}
 			}
 		case "failed":

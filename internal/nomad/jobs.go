@@ -28,8 +28,30 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	fmt.Sscanf(buildLimits.Memory, "%d", &memory)
 	fmt.Sscanf(buildLimits.Disk, "%d", &disk)
 	
-	// Create temporary image name with improved naming scheme
-	tempImageName := nc.generateTempImageName(job)
+	// Determine if we should skip tests (no tests configured)
+	skipTests := len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint
+	
+	var buildImageName string
+	var pushCommands []string
+	
+	if skipTests {
+		// No tests - build with temporary name but push directly to final image tags
+		buildImageName = nc.generateTempImageName(job)
+		baseImageName := fmt.Sprintf("%s/%s", job.Config.RegistryURL, job.Config.ImageName)
+		
+		// Push commands for each final tag
+		for _, tag := range job.Config.ImageTags {
+			finalImageName := fmt.Sprintf("%s:%s", baseImageName, tag)
+			pushCommands = append(pushCommands, 
+				fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", buildImageName, finalImageName))
+		}
+	} else {
+		// Tests configured - use temporary image name and push to temp registry
+		buildImageName = nc.generateTempImageName(job)
+		pushCommands = []string{
+			fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", buildImageName, buildImageName),
+		}
+	}
 	
 	// Build the task commands with layer caching and proper HTTPS handling
 	buildCommands := []string{
@@ -50,14 +72,14 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"",
 		"# Build image with Buildah using layer caching",
 		fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
-			job.Config.DockerfilePath, tempImageName),
+			job.Config.DockerfilePath, buildImageName),
 		"",
 		"# Authenticate with registry if credentials are provided and non-empty",
 		"if [ -f /secrets/registry-creds ]; then",
 		"  source /secrets/registry-creds",
 		"  if [ -n \"$REGISTRY_USERNAME\" ] && [ -n \"$REGISTRY_PASSWORD\" ]; then",
 		"    echo 'Logging in to registry with credentials...'",
-		fmt.Sprintf("    buildah login --username \"$REGISTRY_USERNAME\" --password \"$REGISTRY_PASSWORD\" %s", registryHost(tempImageName)),
+		fmt.Sprintf("    buildah login --username \"$REGISTRY_USERNAME\" --password \"$REGISTRY_PASSWORD\" %s", registryHost(buildImageName)),
 		"  else",
 		"    echo 'No registry credentials provided, attempting anonymous push...'",
 		"  fi",
@@ -68,15 +90,25 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"# Configure buildah to use TLS and mount certificates properly",
 		"export BUILDAH_TLS_VERIFY=true",
 		"",
-		"# Push temporary image to registry using HTTPS with proper TLS verification",
-		fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", tempImageName, tempImageName),
+	}
+	
+	// Add push commands
+	if skipTests {
+		buildCommands = append(buildCommands, "# Push directly to final image tags (no tests configured)")
+	} else {
+		buildCommands = append(buildCommands, "# Push temporary image for testing")
+	}
+	buildCommands = append(buildCommands, pushCommands...)
+	
+	// Final commands
+	buildCommands = append(buildCommands,
 		"",
 		"# Force sync file system to ensure all writes are committed",
 		"sync",
 		"",
 		"echo 'Build completed successfully'",
 		"exit 0", // Explicitly exit to ensure container terminates
-	}
+	)
 	
 	jobSpec := &nomadapi.Job{
 		ID:          &jobID,

@@ -245,6 +245,189 @@ func TestBuildWorkflow(t *testing.T) {
 	t.Logf("Test completed successfully in %s", result.Duration)
 }
 
+// TestBuildWorkflowNoTests tests the optimization where no tests are configured
+// and build pushes directly to final image tags
+func TestBuildWorkflowNoTests(t *testing.T) {
+	// Create results directory
+	resultsDir := "test_results"
+	err := os.MkdirAll(resultsDir, 0755)
+	require.NoError(t, err, "Failed to create results directory")
+
+	startTime := time.Now()
+	result := TestResult{
+		Timestamp: make(map[string]string),
+		Duration:  make(map[string]string),
+	}
+	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
+
+	// Step 1: Discover service URL via Consul
+	t.Log("Discovering nomad-build-service via Consul...")
+	serviceURL, err := discoverServiceURL()
+	if err != nil {
+		result.Error = fmt.Sprintf("Service discovery failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to discover service: %v", err)
+	}
+	t.Logf("Discovered service at: %s", serviceURL)
+
+	// Step 2: Submit build job with NO TESTS configured
+	t.Log("Submitting build job with no tests configured...")
+	jobConfig := types.JobConfig{
+		Owner:           "test",
+		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:          "main",
+		DockerfilePath:  "Dockerfile",
+		ImageName:       "hello-world-no-tests",
+		ImageTags:       []string{"optimized", "latest"},
+		RegistryURL:     "registry.cluster:5000/helloworld",
+		TestCommands:    []string{}, // NO tests
+		TestEntryPoint:  false,      // NO entry point test
+	}
+
+	jobID, err := submitJob(serviceURL, jobConfig)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job submission failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to submit job: %v", err)
+	}
+	result.JobID = jobID
+	t.Logf("Job submitted with ID: %s", jobID)
+
+	// Step 3: Monitor job until completion
+	t.Log("Monitoring job progress...")
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 5*time.Minute)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job monitoring failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to monitor job: %v", err)
+	}
+	t.Logf("Job completed with status: %s", finalStatus)
+
+	// Step 4: Retrieve logs and metrics
+	t.Log("Retrieving job logs...")
+	logs, err := getJobLogs(serviceURL, jobID)
+	if err != nil {
+		result.Error = fmt.Sprintf("Log retrieval failed: %v", err)
+		t.Logf("Warning: Failed to retrieve logs via API: %v", err)
+	} else {
+		result.BuildLogs = logs.Build
+		result.TestLogs = logs.Test
+	}
+	
+	// Get job status for metrics
+	t.Log("Retrieving job metrics...")
+	status, err := getJobStatus(serviceURL, jobID)
+	var metrics *types.JobMetrics
+	if err != nil {
+		t.Logf("Warning: Failed to retrieve metrics via API: %v", err)
+	} else {
+		metrics = &status.Metrics
+	}
+		
+	// If job failed, print the logs to help with debugging
+	if finalStatus == types.StatusFailed {
+		t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
+		
+		if len(result.BuildLogs) > 0 {
+			t.Log("=== BUILD LOGS ===")
+			for _, line := range result.BuildLogs {
+				t.Logf("BUILD: %s", line)
+			}
+		} else {
+			t.Log("No build logs available from service API")
+		}
+		t.Log("=== END FAILURE LOGS ===")
+	}
+
+	// Step 5: Verify optimization worked
+	endTime := time.Now()
+	
+	// Check that build succeeded
+	buildSucceeded := false
+	if len(result.BuildLogs) > 0 {
+		for _, line := range result.BuildLogs {
+			if strings.Contains(line, "Build completed successfully") || 
+			   strings.Contains(line, "Successfully tagged") {
+				buildSucceeded = true
+				break
+			}
+		}
+	}
+	result.BuildSuccess = buildSucceeded
+	
+	// Verify no test phase occurred (optimization check)
+	testPhaseSkipped := true
+	if len(result.TestLogs) > 0 {
+		testPhaseSkipped = false
+		t.Log("Warning: Test logs found even though no tests were configured")
+	}
+	
+	// Check that no test jobs were created
+	noTestJobs := true
+	if metrics != nil && metrics.TestStart != nil {
+		noTestJobs = false
+		t.Log("Warning: Test metrics found even though no tests were configured")
+	}
+	
+	result.Timestamp["job_end"] = endTime.UTC().Format(time.RFC3339)
+	result.Duration["total"] = time.Since(startTime).String()
+	
+	// Get detailed timing from job metrics if available
+	if metrics != nil {
+		if metrics.JobStart != nil {
+			result.Timestamp["job_start"] = metrics.JobStart.Format(time.RFC3339)
+		}
+		if metrics.BuildStart != nil {
+			result.Timestamp["build_start"] = metrics.BuildStart.Format(time.RFC3339)
+		}
+		if metrics.BuildEnd != nil {
+			result.Timestamp["build_end"] = metrics.BuildEnd.Format(time.RFC3339)
+		}
+		if metrics.JobEnd != nil {
+			result.Timestamp["job_end"] = metrics.JobEnd.Format(time.RFC3339)
+		}
+		
+		if metrics.BuildDuration > 0 {
+			result.Duration["build"] = metrics.BuildDuration.String()
+		}
+		if metrics.TotalDuration > 0 {
+			result.Duration["total"] = metrics.TotalDuration.String()
+		}
+	}
+
+	// Step 6: Save detailed logs to files
+	if len(result.BuildLogs) > 0 {
+		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_no_tests_%s.txt", jobID))
+		err = saveLogsToFile(buildLogFile, result.BuildLogs)
+		require.NoError(t, err, "Failed to save build logs")
+		t.Logf("Build logs saved to: %s", buildLogFile)
+	}
+
+	// Step 7: Save test result summary
+	saveTestResult(t, resultsDir, result)
+
+	// Step 8: Assert test results
+	assert.Equal(t, types.StatusSucceeded, finalStatus, "Job should complete successfully")
+	assert.True(t, buildSucceeded, "Build should succeed")
+	assert.True(t, testPhaseSkipped, "Test phase should be skipped when no tests configured")
+	assert.True(t, noTestJobs, "No test jobs should be created when no tests configured")
+	
+	// Verify build logs contain evidence of direct push to final image tags
+	if len(result.BuildLogs) > 0 {
+		foundDirectPush := false
+		for _, line := range result.BuildLogs {
+			if strings.Contains(line, "Push directly to final image tags") ||
+			   strings.Contains(line, "registry.cluster:5000/helloworld/hello-world-no-tests:") {
+				foundDirectPush = true
+				break
+			}
+		}
+		assert.True(t, foundDirectPush, "Build logs should show direct push to final image tags")
+	}
+
+	t.Logf("No-tests optimization test completed successfully in %s", result.Duration["total"])
+}
+
 // discoverServiceURL discovers the nomad-build-service URL via Consul
 func discoverServiceURL() (string, error) {
 	// Create Consul client
