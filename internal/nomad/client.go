@@ -452,24 +452,58 @@ func (nc *Client) GetJobLogs(job *types.Job) (types.JobLogs, error) {
 func (nc *Client) KillJob(job *types.Job) error {
 	var errors []string
 	
-	// Kill build job if running
+	nc.logger.WithField("job_id", job.ID).Info("Starting graceful job termination")
+	
+	// First, try to gracefully stop jobs by setting them to stop (allows completion)
+	// This is safer than hard deregistration during build operations
+	
+	// Handle build job
 	if job.BuildJobID != "" {
-		if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, true, nil); err != nil {
-			errors = append(errors, fmt.Sprintf("build: %v", err))
+		buildStatus, err := nc.getJobStatus(job.BuildJobID)
+		if err == nil && buildStatus == "running" {
+			nc.logger.WithField("build_job_id", job.BuildJobID).Info("Gracefully stopping build job")
+			
+			// Try graceful stop first (allows current operations to complete)
+			if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, false, nil); err != nil {
+				nc.logger.WithError(err).Warn("Graceful stop failed, forcing termination")
+				// Force stop if graceful fails
+				if _, _, err := nc.client.Jobs().Deregister(job.BuildJobID, true, nil); err != nil {
+					errors = append(errors, fmt.Sprintf("build: %v", err))
+				}
+			} else {
+				// Wait briefly for graceful shutdown
+				time.Sleep(2 * time.Second)
+			}
 		}
 	}
 	
-	// Kill test jobs if running
+	// Handle test jobs
 	for _, testJobID := range job.TestJobIDs {
-		if _, _, err := nc.client.Jobs().Deregister(testJobID, true, nil); err != nil {
-			errors = append(errors, fmt.Sprintf("test job %s: %v", testJobID, err))
+		testStatus, err := nc.getJobStatus(testJobID)
+		if err == nil && testStatus == "running" {
+			nc.logger.WithField("test_job_id", testJobID).Info("Gracefully stopping test job")
+			
+			if _, _, err := nc.client.Jobs().Deregister(testJobID, false, nil); err != nil {
+				nc.logger.WithError(err).Warn("Graceful stop failed, forcing termination")
+				if _, _, err := nc.client.Jobs().Deregister(testJobID, true, nil); err != nil {
+					errors = append(errors, fmt.Sprintf("test job %s: %v", testJobID, err))
+				}
+			}
 		}
 	}
 	
-	// Kill publish job if running
+	// Handle publish job
 	if job.PublishJobID != "" {
-		if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, true, nil); err != nil {
-			errors = append(errors, fmt.Sprintf("publish: %v", err))
+		publishStatus, err := nc.getJobStatus(job.PublishJobID)
+		if err == nil && publishStatus == "running" {
+			nc.logger.WithField("publish_job_id", job.PublishJobID).Info("Gracefully stopping publish job")
+			
+			if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, false, nil); err != nil {
+				nc.logger.WithError(err).Warn("Graceful stop failed, forcing termination")
+				if _, _, err := nc.client.Jobs().Deregister(job.PublishJobID, true, nil); err != nil {
+					errors = append(errors, fmt.Sprintf("publish: %v", err))
+				}
+			}
 		}
 	}
 	
@@ -477,6 +511,7 @@ func (nc *Client) KillJob(job *types.Job) error {
 		return fmt.Errorf("failed to kill some jobs: %s", strings.Join(errors, ", "))
 	}
 	
+	nc.logger.WithField("job_id", job.ID).Info("Job termination completed")
 	return nil
 }
 

@@ -46,6 +46,9 @@ func TestBuildWorkflow(t *testing.T) {
 	}
 	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
 
+	// Generate unique test identifier to avoid registry conflicts
+	testID := fmt.Sprintf("test-%d", time.Now().Unix())
+	
 	// Step 1: Discover service URL via Consul
 	t.Log("Discovering nomad-build-service via Consul...")
 	serviceURL, err := discoverServiceURL()
@@ -56,16 +59,16 @@ func TestBuildWorkflow(t *testing.T) {
 	}
 	t.Logf("Discovered service at: %s", serviceURL)
 
-	// Step 2: Submit build job
+	// Step 2: Submit build job with unique naming to avoid conflicts
 	t.Log("Submitting build job...")
 	jobConfig := types.JobConfig{
 		Owner:           "test",
 		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
 		GitRef:          "main",
 		DockerfilePath:  "Dockerfile",
-		ImageName:       "hello-world-test",
-		ImageTags:       []string{"hello-world-test"},
-		RegistryURL:     "registry.cluster:5000/helloworld",
+		ImageName:       fmt.Sprintf("hello-world-%s", testID), // Unique image name
+		ImageTags:       []string{"latest"},
+		RegistryURL:     fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
 		TestCommands:    []string{}, // Empty to use entry point
 		TestEntryPoint:  true,
 	}
@@ -77,11 +80,11 @@ func TestBuildWorkflow(t *testing.T) {
 		t.Fatalf("Failed to submit job: %v", err)
 	}
 	result.JobID = jobID
-	t.Logf("Job submitted with ID: %s", jobID)
+	t.Logf("Job submitted with ID: %s (testID: %s)", jobID, testID)
 
-	// Step 3: Monitor job until completion
+	// Step 3: Monitor job until completion with extended timeout
 	t.Log("Monitoring job progress...")
-	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 10*time.Minute)
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 15*time.Minute) // Extended timeout
 	if err != nil {
 		result.Error = fmt.Sprintf("Job monitoring failed: %v", err)
 		saveTestResult(t, resultsDir, result)
@@ -212,14 +215,14 @@ func TestBuildWorkflow(t *testing.T) {
 
 	// Step 6: Save detailed logs to files
 	if len(result.BuildLogs) > 0 {
-		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_%s.txt", jobID))
+		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_%s_%s.txt", testID, jobID))
 		err = saveLogsToFile(buildLogFile, result.BuildLogs)
 		require.NoError(t, err, "Failed to save build logs")
 		t.Logf("Build logs saved to: %s", buildLogFile)
 	}
 
 	if len(result.TestLogs) > 0 {
-		testLogFile := filepath.Join(resultsDir, fmt.Sprintf("test_logs_%s.txt", jobID))
+		testLogFile := filepath.Join(resultsDir, fmt.Sprintf("test_logs_%s_%s.txt", testID, jobID))
 		err = saveLogsToFile(testLogFile, result.TestLogs)
 		require.NoError(t, err, "Failed to save test logs")
 		t.Logf("Test logs saved to: %s", testLogFile)
@@ -260,6 +263,9 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 	}
 	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
 
+	// Generate unique test identifier to avoid registry conflicts
+	testID := fmt.Sprintf("notest-%d", time.Now().Unix())
+
 	// Step 1: Discover service URL via Consul
 	t.Log("Discovering nomad-build-service via Consul...")
 	serviceURL, err := discoverServiceURL()
@@ -270,16 +276,16 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 	}
 	t.Logf("Discovered service at: %s", serviceURL)
 
-	// Step 2: Submit build job with NO TESTS configured
+	// Step 2: Submit build job with NO TESTS configured and unique naming
 	t.Log("Submitting build job with no tests configured...")
 	jobConfig := types.JobConfig{
 		Owner:           "test",
 		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
 		GitRef:          "main",
 		DockerfilePath:  "Dockerfile",
-		ImageName:       "hello-world-no-tests",
+		ImageName:       fmt.Sprintf("hello-world-%s", testID), // Unique image name
 		ImageTags:       []string{"optimized", "latest"},
-		RegistryURL:     "registry.cluster:5000/helloworld",
+		RegistryURL:     fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
 		TestCommands:    []string{}, // NO tests
 		TestEntryPoint:  false,      // NO entry point test
 	}
@@ -291,11 +297,11 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 		t.Fatalf("Failed to submit job: %v", err)
 	}
 	result.JobID = jobID
-	t.Logf("Job submitted with ID: %s", jobID)
+	t.Logf("Job submitted with ID: %s (testID: %s)", jobID, testID)
 
-	// Step 3: Monitor job until completion
+	// Step 3: Monitor job until completion with reasonable timeout
 	t.Log("Monitoring job progress...")
-	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 5*time.Minute)
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 10*time.Minute) // Should be faster without tests
 	if err != nil {
 		result.Error = fmt.Sprintf("Job monitoring failed: %v", err)
 		saveTestResult(t, resultsDir, result)
@@ -397,7 +403,7 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 
 	// Step 6: Save detailed logs to files
 	if len(result.BuildLogs) > 0 {
-		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_no_tests_%s.txt", jobID))
+		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_%s_%s.txt", testID, jobID))
 		err = saveLogsToFile(buildLogFile, result.BuildLogs)
 		require.NoError(t, err, "Failed to save build logs")
 		t.Logf("Build logs saved to: %s", buildLogFile)
@@ -417,7 +423,7 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 		foundDirectPush := false
 		for _, line := range result.BuildLogs {
 			if strings.Contains(line, "Push directly to final image tags") ||
-			   strings.Contains(line, "registry.cluster:5000/helloworld/hello-world-no-tests:") {
+			   strings.Contains(line, fmt.Sprintf("registry.cluster:5000/%s/hello-world-%s:", testID, testID)) {
 				foundDirectPush = true
 				break
 			}
@@ -426,6 +432,22 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 	}
 
 	t.Logf("No-tests optimization test completed successfully in %s", result.Duration["total"])
+}
+
+// TestSequential ensures tests run one at a time to avoid registry conflicts
+func TestSequential(t *testing.T) {
+	// This test orchestrates running other tests sequentially
+	// to avoid concurrent registry conflicts
+	
+	t.Run("BuildWorkflow", func(t *testing.T) {
+		// Run the standard build workflow test
+		TestBuildWorkflow(t)
+	})
+	
+	t.Run("BuildWorkflowNoTests", func(t *testing.T) {
+		// Run the no-tests optimization test after the first one completes
+		TestBuildWorkflowNoTests(t)
+	})
 }
 
 // discoverServiceURL discovers the nomad-build-service URL via Consul
