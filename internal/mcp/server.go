@@ -1,9 +1,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,6 +40,9 @@ type Server struct {
 	
 	// WebSocket upgrader
 	upgrader websocket.Upgrader
+	
+	// Webhook client for sending notifications
+	webhookClient *http.Client
 }
 
 // getJobMutex returns or creates a mutex for the given job ID
@@ -70,6 +78,14 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for now
+			},
+		},
+		webhookClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				IdleConnTimeout:     90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
 			},
 		},
 	}
@@ -601,6 +617,9 @@ func (s *Server) backgroundJobMonitor(ctx context.Context) {
 						continue
 					}
 					
+					oldStatus := freshJob.Status
+					oldPhase := freshJob.CurrentPhase
+					
 					// Update job status which will trigger phase transitions
 					updatedJob, err := s.nomadClient.UpdateJobStatus(freshJob)
 					if err != nil {
@@ -623,13 +642,18 @@ func (s *Server) backgroundJobMonitor(ctx context.Context) {
 					// Save updated job state
 					s.storage.UpdateJob(updatedJob)
 					
-					// Log status changes for debugging
-					if updatedJob.Status != freshJob.Status {
+					// Send webhooks for status/phase changes
+					if updatedJob.Status != oldStatus || updatedJob.CurrentPhase != oldPhase {
 						s.logger.WithFields(logrus.Fields{
-							"job_id": job.ID,
-							"old_status": freshJob.Status,
+							"job_id":    job.ID,
+							"old_status": oldStatus,
 							"new_status": updatedJob.Status,
-						}).Info("Job status changed")
+							"old_phase":  oldPhase,
+							"new_phase":  updatedJob.CurrentPhase,
+						}).Info("Job status/phase changed")
+						
+						// Send appropriate webhook events
+						s.handleJobStatusChange(updatedJob, oldStatus, oldPhase)
 					}
 					
 					unlock()
@@ -1360,5 +1384,203 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request, jobID str
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		s.logger.WithError(err).Error("Failed to encode logs response")
 		s.writeErrorResponse(w, "Failed to encode response", http.StatusInternalServerError, "")
+	}
+}
+
+// sendWebhook sends a webhook notification for job events
+func (s *Server) sendWebhook(job *types.Job, event types.WebhookEvent) {
+	if job.Config.WebhookURL == "" {
+		return
+	}
+	
+	// Check if we should send webhook for this event type
+	shouldSend := false
+	switch event {
+	case types.WebhookEventJobCompleted:
+		shouldSend = job.Config.WebhookOnSuccess || (job.Config.WebhookOnSuccess == false && job.Config.WebhookOnFailure == false) // Default to true
+	case types.WebhookEventJobFailed, types.WebhookEventBuildFailed, types.WebhookEventTestFailed:
+		shouldSend = job.Config.WebhookOnFailure || (job.Config.WebhookOnSuccess == false && job.Config.WebhookOnFailure == false) // Default to true
+	default:
+		shouldSend = true // Send all other events by default
+	}
+	
+	if !shouldSend {
+		return
+	}
+	
+	// Create webhook payload
+	payload := types.WebhookPayload{
+		JobID:     job.ID,
+		Status:    job.Status,
+		Timestamp: time.Now(),
+		Owner:     job.Config.Owner,
+		RepoURL:   job.Config.RepoURL,
+		GitRef:    job.Config.GitRef,
+		ImageName: job.Config.ImageName,
+		ImageTags: job.Config.ImageTags,
+		Phase:     job.CurrentPhase,
+	}
+	
+	if job.StartTime != nil && job.EndTime != nil {
+		payload.Duration = job.EndTime.Sub(*job.StartTime)
+	}
+	
+	if job.Status == types.StatusFailed && job.Error != "" {
+		payload.Error = job.Error
+	}
+	
+	// Include logs and metrics from the job struct
+	payload.Logs = &job.Logs
+	payload.Metrics = &job.Metrics
+	
+	// Send webhook asynchronously
+	go s.sendWebhookAsync(job.Config.WebhookURL, job.Config.WebhookSecret, job.Config.WebhookHeaders, &payload)
+}
+
+// sendWebhookAsync sends webhook notification asynchronously with retries
+func (s *Server) sendWebhookAsync(webhookURL, secret string, headers map[string]string, payload *types.WebhookPayload) {
+	maxRetries := 3
+	retryDelay := time.Second
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := s.sendWebhookRequest(webhookURL, secret, headers, payload); err != nil {
+			s.logger.WithFields(logrus.Fields{
+				"job_id":      payload.JobID,
+				"webhook_url": webhookURL,
+				"attempt":     attempt,
+				"error":       err,
+			}).Warn("Webhook delivery failed")
+			
+			if attempt < maxRetries {
+				time.Sleep(retryDelay * time.Duration(attempt))
+			}
+		} else {
+			s.logger.WithFields(logrus.Fields{
+				"job_id":      payload.JobID,
+				"webhook_url": webhookURL,
+				"status":      payload.Status,
+			}).Info("Webhook delivered successfully")
+			return
+		}
+	}
+	
+	s.logger.WithFields(logrus.Fields{
+		"job_id":      payload.JobID,
+		"webhook_url": webhookURL,
+	}).Error("Webhook delivery failed after all retries")
+}
+
+// sendWebhookRequest sends the actual HTTP request to the webhook URL
+func (s *Server) sendWebhookRequest(webhookURL, secret string, headers map[string]string, payload *types.WebhookPayload) error {
+	// Marshal payload to JSON
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook payload: %w", err)
+	}
+	
+	// Create HTTP request
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %w", err)
+	}
+	
+	// Set default headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "nomad-build-service/1.0")
+	
+	// Add custom headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	
+	// Add HMAC signature if secret is provided
+	if secret != "" {
+		signature := s.generateWebhookSignature(jsonData, secret)
+		req.Header.Set("X-Webhook-Signature", signature)
+		payload.Signature = signature
+	}
+	
+	// Set timeout for webhook requests
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	
+	// Send request
+	resp, err := s.webhookClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send webhook request: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	// Check response status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("webhook returned status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// generateWebhookSignature generates HMAC-SHA256 signature for webhook authentication
+func (s *Server) generateWebhookSignature(payload []byte, secret string) string {
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(payload)
+	return "sha256=" + hex.EncodeToString(h.Sum(nil))
+}
+
+// handleJobStatusChange sends appropriate webhook events based on job status/phase changes
+func (s *Server) handleJobStatusChange(job *types.Job, oldStatus types.JobStatus, oldPhase string) {
+	newStatus := job.Status
+	newPhase := job.CurrentPhase
+	
+	// Determine the appropriate webhook event based on status and phase changes
+	var events []types.WebhookEvent
+	
+	// Phase-specific events
+	if newPhase != oldPhase {
+		switch newPhase {
+		case "build":
+			if oldPhase != "build" {
+				events = append(events, types.WebhookEventBuildStarted)
+			}
+		case "test":
+			if oldPhase != "test" {
+				events = append(events, types.WebhookEventTestStarted)
+			}
+		}
+	}
+	
+	// Status-specific events
+	if newStatus != oldStatus {
+		switch newStatus {
+		case types.StatusSucceeded:
+			// Job completed successfully
+			events = append(events, types.WebhookEventJobCompleted)
+			
+			// Also send phase completion events
+			switch newPhase {
+			case "build":
+				events = append(events, types.WebhookEventBuildCompleted)
+			case "test":
+				events = append(events, types.WebhookEventTestCompleted)
+			}
+			
+		case types.StatusFailed:
+			// Job failed
+			events = append(events, types.WebhookEventJobFailed)
+			
+			// Also send phase failure events
+			switch newPhase {
+			case "build":
+				events = append(events, types.WebhookEventBuildFailed)
+			case "test":
+				events = append(events, types.WebhookEventTestFailed)
+			}
+		}
+	}
+	
+	// Send all applicable webhook events
+	for _, event := range events {
+		s.sendWebhook(job, event)
 	}
 }

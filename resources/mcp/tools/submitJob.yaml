@@ -153,3 +153,28 @@ input_schema:
               type: "string"
               description: "Disk limit in MB. Recommended: 2048-5120 (temporary space for image layers)."
               examples: ["2048", "3072", "5120"]
+
+    # Webhook configuration for build notifications
+    webhook_url:
+      type: "string"
+      description: "Optional webhook URL to receive build notifications. Eliminates need for polling status."
+
+    webhook_secret:
+      type: "string"
+      description: "Optional secret for webhook authentication. Used to generate HMAC-SHA256 signature."
+
+    webhook_on_success:
+      type: "boolean"
+      description: "Send webhook on successful builds (default: true)"
+      default: true
+
+    webhook_on_failure:
+      type: "boolean"
+      description: "Send webhook on failed builds (default: true)"
+      default: true
+
+    webhook_headers:
+      type: "object"
+      description: "Optional custom headers to include in webhook requests"
+      additionalProperties:
+        type: "string"

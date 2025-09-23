@@ -31,6 +31,13 @@ type JobConfig struct {
 	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty"`
 	TestTimeout             *time.Duration  `json:"test_timeout,omitempty"`
 	ClearCache              bool     `json:"clear_cache,omitempty"`  // Clear build cache before building
+	
+	// Webhook configuration for build notifications
+	WebhookURL              string   `json:"webhook_url,omitempty"`              // URL to call on build completion
+	WebhookSecret           string   `json:"webhook_secret,omitempty"`           // Optional secret for webhook authentication
+	WebhookOnSuccess        bool     `json:"webhook_on_success,omitempty"`       // Send webhook on successful builds (default: true)
+	WebhookOnFailure        bool     `json:"webhook_on_failure,omitempty"`       // Send webhook on failed builds (default: true)
+	WebhookHeaders          map[string]string `json:"webhook_headers,omitempty"`   // Optional custom headers
 }
 
 // PhaseResourceLimits defines resource constraints for a single phase
@@ -222,6 +229,11 @@ type Job struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	
+	// Timing fields for webhook payloads
+	StartTime    *time.Time `json:"start_time,omitempty"`
+	EndTime      *time.Time `json:"end_time,omitempty"`
+	CurrentPhase string     `json:"current_phase,omitempty"`
+	
 	// Nomad job IDs for each phase
 	BuildJobID   string   `json:"build_job_id,omitempty"`
 	TestJobIDs   []string `json:"test_job_ids,omitempty"`  // Multiple test jobs
@@ -285,3 +297,35 @@ type JobHistory struct {
 	Duration  time.Duration `json:"duration"`
 	Metrics   JobMetrics    `json:"metrics"`
 }
+
+// WebhookPayload represents the payload sent to webhook URLs
+type WebhookPayload struct {
+	JobID       string                 `json:"job_id"`
+	Status      JobStatus              `json:"status"`
+	Timestamp   time.Time             `json:"timestamp"`
+	Duration    time.Duration         `json:"duration,omitempty"`    // Total build duration
+	Owner       string                `json:"owner"`
+	RepoURL     string                `json:"repo_url"`
+	GitRef      string                `json:"git_ref"`
+	ImageName   string                `json:"image_name"`
+	ImageTags   []string              `json:"image_tags"`
+	Error       string                `json:"error,omitempty"`       // Error message if failed
+	Logs        *JobLogs              `json:"logs,omitempty"`        // Optional: include logs
+	Metrics     *JobMetrics           `json:"metrics,omitempty"`     // Optional: include metrics
+	Phase       string                `json:"phase,omitempty"`       // Current/failed phase
+	Signature   string                `json:"signature,omitempty"`   // HMAC signature for webhook authentication
+}
+
+// WebhookEvent represents different types of webhook events
+type WebhookEvent string
+
+const (
+	WebhookEventBuildStarted   WebhookEvent = "build.started"
+	WebhookEventBuildCompleted WebhookEvent = "build.completed"
+	WebhookEventBuildFailed    WebhookEvent = "build.failed"
+	WebhookEventTestStarted    WebhookEvent = "test.started"
+	WebhookEventTestCompleted  WebhookEvent = "test.completed"
+	WebhookEventTestFailed     WebhookEvent = "test.failed"
+	WebhookEventJobCompleted   WebhookEvent = "job.completed"
+	WebhookEventJobFailed      WebhookEvent = "job.failed"
+)
