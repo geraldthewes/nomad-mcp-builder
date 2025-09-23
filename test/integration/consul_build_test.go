@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -450,6 +451,143 @@ func TestSequential(t *testing.T) {
 	})
 }
 
+// TestWebhookNotifications tests webhook notification functionality
+func TestWebhookNotifications(t *testing.T) {
+	// Start webhook receiver
+	receiver := NewWebhookReceiver(8889)
+	if err := receiver.Start(); err != nil {
+		t.Fatalf("Failed to start webhook receiver: %v", err)
+	}
+	defer receiver.Stop()
+	
+	// Discover service URL
+	t.Log("Discovering nomad-build-service via Consul...")
+	serviceURL, err := discoverServiceURL()
+	if err != nil {
+		t.Fatalf("Failed to discover service: %v", err)
+	}
+	t.Logf("Discovered service at: %s", serviceURL)
+	
+	// Prepare webhook configuration
+	webhookSecret := "test-secret-webhook-123"
+	webhookURL := "http://10.0.1.12:8889/webhook"
+	
+	// Submit build job with webhook configuration
+	t.Log("Submitting build job with webhook configuration...")
+	testID := fmt.Sprintf("webhook-test-%d", time.Now().Unix())
+	
+	// Need to import types package
+	jobConfig := types.JobConfig{
+		Owner:          "test",
+		RepoURL:        "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:         "main",
+		DockerfilePath: "Dockerfile",
+		ImageName:      "webhook-test",
+		ImageTags:      []string{testID},
+		RegistryURL:    "registry.cluster:5000/webhooktest",
+		TestEntryPoint: true,
+		WebhookURL:     webhookURL,
+		WebhookSecret:  webhookSecret,
+		WebhookOnSuccess: true,
+		WebhookOnFailure: true,
+		WebhookHeaders: map[string]string{
+			"X-Test-ID":     testID,
+			"Authorization": "Bearer test-token",
+		},
+	}
+	
+	jobID, err := submitJob(serviceURL, jobConfig)
+	if err != nil {
+		t.Fatalf("Failed to submit job: %v", err)
+	}
+	t.Logf("Job submitted with ID: %s (testID: %s)", jobID, testID)
+	
+	// Monitor job until completion
+	t.Log("Monitoring job progress...")
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 60*time.Second)
+	if err != nil {
+		t.Fatalf("Error monitoring job: %v", err)
+	}
+	t.Logf("Job completed with status: %s", finalStatus)
+	
+	// Wait for webhook events (expect at least job completion event)
+	t.Log("Waiting for webhook events...")
+	if err := receiver.WaitForEvents(1, 30*time.Second); err != nil {
+		t.Fatalf("Failed to receive webhook events: %v", err)
+	}
+	
+	// Analyze received events
+	events := receiver.GetEvents()
+	t.Logf("Received %d webhook events", len(events))
+	
+	// Validate webhook events
+	foundJobComplete := false
+	for i, event := range events {
+		t.Logf("Event %d: %s", i+1, event.Payload["status"])
+		
+		// Validate payload structure
+		if event.Payload["job_id"] != jobID {
+			t.Errorf("Event %d: Expected job_id %s, got %s", i+1, jobID, event.Payload["job_id"])
+		}
+		
+		if event.Payload["owner"] != "test" {
+			t.Errorf("Event %d: Expected owner 'test', got %s", i+1, event.Payload["owner"])
+		}
+		
+		// Validate custom headers
+		if event.Headers["X-Test-Id"] != testID {
+			t.Errorf("Event %d: Expected X-Test-ID header %s, got %s", i+1, testID, event.Headers["X-Test-Id"])
+		}
+		
+		if event.Headers["Authorization"] != "Bearer test-token" {
+			t.Errorf("Event %d: Expected Authorization header, got %s", i+1, event.Headers["Authorization"])
+		}
+		
+		// Validate HMAC signature
+		if event.Signature == "" {
+			t.Errorf("Event %d: Missing webhook signature", i+1)
+		} else if !strings.HasPrefix(event.Signature, "sha256=") {
+			t.Errorf("Event %d: Invalid signature format: %s", i+1, event.Signature)
+		}
+		
+		// Check for job completion event
+		if event.Payload["status"] == "SUCCEEDED" {
+			foundJobComplete = true
+			
+			// Validate completion event has duration
+			if event.Payload["duration"] == nil {
+				t.Errorf("Event %d: Job completion event missing duration", i+1)
+			}
+			
+			// Validate logs and metrics are included
+			if event.Payload["logs"] == nil {
+				t.Errorf("Event %d: Job completion event missing logs", i+1)
+			}
+			
+			if event.Payload["metrics"] == nil {
+				t.Errorf("Event %d: Job completion event missing metrics", i+1)
+			}
+		}
+	}
+	
+	// Ensure we got the job completion event
+	if !foundJobComplete {
+		t.Error("Did not receive job completion webhook event")
+	}
+	
+	// Validate that job succeeded
+	if finalStatus != "SUCCEEDED" {
+		t.Errorf("Expected job to succeed, got status: %s", finalStatus)
+	}
+	
+	t.Log("=== WEBHOOK TEST SUMMARY ===")
+	t.Logf("Status: PASSED")
+	t.Logf("Job ID: %s", jobID)
+	t.Logf("Webhook Events: %d", len(events))
+	t.Logf("Final Status: %s", finalStatus)
+	t.Log("Webhook notifications working correctly!")
+}
+
 // discoverServiceURL discovers the nomad-build-service URL via Consul
 func discoverServiceURL() (string, error) {
 	// Create Consul client
@@ -651,5 +789,130 @@ func saveTestResult(t *testing.T, resultsDir string, result TestResult) {
 	t.Logf("Duration: %s", result.Duration)
 	if result.Error != "" {
 		t.Logf("Error: %s", result.Error)
+	}
+}
+
+// WebhookReceiver captures webhook events for testing
+type WebhookReceiver struct {
+	Events []WebhookEvent `json:"events"`
+	mutex  sync.Mutex
+	server *http.Server
+}
+
+type WebhookEvent struct {
+	Timestamp time.Time                `json:"timestamp"`
+	Headers   map[string]string        `json:"headers"`
+	Payload   map[string]interface{}   `json:"payload"`
+	Signature string                   `json:"signature"`
+}
+
+// NewWebhookReceiver creates a new webhook receiver for testing
+func NewWebhookReceiver(port int) *WebhookReceiver {
+	receiver := &WebhookReceiver{
+		Events: make([]WebhookEvent, 0),
+	}
+	
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webhook", receiver.handleWebhook)
+	
+	receiver.server = &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+	
+	return receiver
+}
+
+// Start starts the webhook receiver server
+func (wr *WebhookReceiver) Start() error {
+	go func() {
+		if err := wr.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("Webhook server error: %v\n", err)
+		}
+	}()
+	
+	// Wait for server to start
+	time.Sleep(100 * time.Millisecond)
+	return nil
+}
+
+// Stop stops the webhook receiver server
+func (wr *WebhookReceiver) Stop() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return wr.server.Shutdown(ctx)
+}
+
+// handleWebhook handles incoming webhook requests
+func (wr *WebhookReceiver) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Read body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	
+	// Parse payload
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	
+	// Extract headers
+	headers := make(map[string]string)
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+	
+	// Create event
+	event := WebhookEvent{
+		Timestamp: time.Now(),
+		Headers:   headers,
+		Payload:   payload,
+		Signature: headers["X-Webhook-Signature"],
+	}
+	
+	// Store event
+	wr.mutex.Lock()
+	wr.Events = append(wr.Events, event)
+	wr.mutex.Unlock()
+	
+	fmt.Printf("Webhook received: %s at %s\n", payload["status"], event.Timestamp.Format(time.RFC3339))
+	
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+// GetEvents returns all received webhook events
+func (wr *WebhookReceiver) GetEvents() []WebhookEvent {
+	wr.mutex.Lock()
+	defer wr.mutex.Unlock()
+	
+	events := make([]WebhookEvent, len(wr.Events))
+	copy(events, wr.Events)
+	return events
+}
+
+// WaitForEvents waits for at least the specified number of webhook events
+func (wr *WebhookReceiver) WaitForEvents(minEvents int, timeout time.Duration) error {
+	start := time.Now()
+	for {
+		if len(wr.GetEvents()) >= minEvents {
+			return nil
+		}
+		
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for %d events, got %d", minEvents, len(wr.GetEvents()))
+		}
+		
+		time.Sleep(100 * time.Millisecond)
 	}
 }
