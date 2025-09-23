@@ -17,13 +17,22 @@ import (
 
 // Client wraps the Nomad API client with build service specific functionality
 type Client struct {
-	client *nomadapi.Client
-	config *config.Config
-	logger *logrus.Logger
+	client  *nomadapi.Client
+	config  *config.Config
+	logger  *logrus.Logger
+	storage interface {
+		AcquireLock(lockKey string, timeout time.Duration) (string, error)
+		ReleaseLock(lockKey, sessionID string) error
+		GenerateImageLockKey(registryURL, imageName, branch string) string
+	}
 }
 
 // NewClient creates a new Nomad client
-func NewClient(cfg *config.Config) (*Client, error) {
+func NewClient(cfg *config.Config, storage interface {
+	AcquireLock(lockKey string, timeout time.Duration) (string, error)
+	ReleaseLock(lockKey, sessionID string) error
+	GenerateImageLockKey(registryURL, imageName, branch string) string
+}) (*Client, error) {
 	nomadConfig := nomadapi.DefaultConfig()
 	nomadConfig.Address = cfg.Nomad.Address
 	nomadConfig.SecretID = cfg.Nomad.Token
@@ -46,17 +55,41 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	logger.SetLevel(level)
 	
 	return &Client{
-		client: client,
-		config: cfg,
-		logger: logger,
+		client:  client,
+		config:  cfg,
+		logger:  logger,
+		storage: storage,
 	}, nil
 }
 
 // CreateJob creates a new build job and starts the build phase
 func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
+	// Generate lock key for this image build
+	lockKey := nc.storage.GenerateImageLockKey(jobConfig.RegistryURL, jobConfig.ImageName, jobConfig.GitRef)
+
+	// Try to acquire lock for this image/branch combination
+	sessionID, err := nc.storage.AcquireLock(lockKey, 30*time.Minute)
+	if err != nil {
+		nc.logger.WithFields(logrus.Fields{
+			"lock_key":      lockKey,
+			"registry_url":  jobConfig.RegistryURL,
+			"image_name":    jobConfig.ImageName,
+			"git_ref":       jobConfig.GitRef,
+		}).Warn("Failed to acquire build lock - another build may be in progress")
+		return nil, fmt.Errorf("cannot start build: %w", err)
+	}
+
+	nc.logger.WithFields(logrus.Fields{
+		"lock_key":      lockKey,
+		"session_id":    sessionID,
+		"registry_url":  jobConfig.RegistryURL,
+		"image_name":    jobConfig.ImageName,
+		"git_ref":       jobConfig.GitRef,
+	}).Info("Build lock acquired successfully")
+
 	jobID := uuid.New().String()
 	now := time.Now()
-	
+
 	job := &types.Job{
 		ID:        jobID,
 		Config:    *jobConfig,
@@ -67,11 +100,18 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 		Metrics:   types.JobMetrics{
 			JobStart: &now,
 		},
+		// Store lock information for cleanup
+		LockKey:       lockKey,
+		LockSessionID: sessionID,
 	}
 	
 	// Create and submit the build job to Nomad
 	buildJobSpec, err := nc.createBuildJobSpec(job)
 	if err != nil {
+		// Release lock if job spec creation fails
+		if releaseErr := nc.storage.ReleaseLock(lockKey, sessionID); releaseErr != nil {
+			nc.logger.WithError(releaseErr).Warn("Failed to release lock after job spec creation failure")
+		}
 		return nil, fmt.Errorf("failed to create build job spec: %w", err)
 	}
 	
@@ -90,6 +130,11 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	
 	evalID, _, err := nc.client.Jobs().RegisterOpts(buildJobSpec, registerOpts, writeOpts)
 	if err != nil {
+		// Release lock if job registration fails
+		if releaseErr := nc.storage.ReleaseLock(lockKey, sessionID); releaseErr != nil {
+			nc.logger.WithError(releaseErr).Warn("Failed to release lock after job registration failure")
+		}
+
 		// Check for specific Vault template errors and provide better feedback
 		errorMsg := err.Error()
 		if strings.Contains(errorMsg, "Template failed") && strings.Contains(errorMsg, "vault.read: invalid format") {
@@ -155,6 +200,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				if job.Metrics.JobStart != nil {
 					job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
 				}
+				// Release build lock since job is complete
+				nc.releaseBuildLock(job)
 			} else {
 				// Start test phase with a small delay to avoid Docker layer race conditions
 				if job.Status == types.StatusBuilding {
@@ -168,6 +215,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 						job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
 						job.FinishedAt = &now
 						job.Metrics.JobEnd = &now
+						// Release build lock since job failed
+						nc.releaseBuildLock(job)
 					} else {
 						job.Status = types.StatusTesting
 						job.Metrics.TestStart = &now
@@ -196,6 +245,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			if job.Metrics.BuildStart != nil {
 				job.Metrics.BuildDuration = now.Sub(*job.Metrics.BuildStart)
 			}
+			// Release build lock since job failed
+			nc.releaseBuildLock(job)
 		}
 	}
 	
@@ -253,6 +304,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			if job.Metrics.TestStart != nil {
 				job.Metrics.TestDuration = now.Sub(*job.Metrics.TestStart)
 			}
+			// Release build lock since job failed
+			nc.releaseBuildLock(job)
 		} else if allComplete {
 			// All tests completed successfully, capture logs before they disappear
 			if err := nc.capturePhaseLogs(job, "test"); err != nil {
@@ -275,6 +328,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 					job.Error = fmt.Sprintf("Failed to start publish phase: %v", err)
 					job.FinishedAt = &now
 					job.Metrics.JobEnd = &now
+					// Release build lock since job failed
+					nc.releaseBuildLock(job)
 				} else {
 					job.Status = types.StatusPublishing
 					job.Metrics.PublishStart = &now
@@ -302,7 +357,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			job.Status = types.StatusSucceeded
 			now := time.Now()
 			job.FinishedAt = &now
-			
+
 			// Mark publish phase as complete (only set end time if not already set)
 			if job.Metrics.PublishEnd == nil {
 				job.Metrics.PublishEnd = &now
@@ -310,12 +365,14 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 					job.Metrics.PublishDuration = now.Sub(*job.Metrics.PublishStart)
 				}
 			}
-			
+
 			job.Metrics.JobEnd = &now
 			// Calculate total duration
 			if job.Metrics.JobStart != nil {
 				job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
 			}
+			// Release build lock since job is complete
+			nc.releaseBuildLock(job)
 		case "failed":
 			// Capture logs from failed publish before they disappear
 			if err := nc.capturePhaseLogs(job, "publish"); err != nil {
@@ -342,6 +399,8 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			if job.Metrics.JobStart != nil {
 				job.Metrics.TotalDuration = now.Sub(*job.Metrics.JobStart)
 			}
+			// Release build lock since job failed
+			nc.releaseBuildLock(job)
 		}
 	}
 	
@@ -582,6 +641,28 @@ func (nc *Client) Health() error {
 		return fmt.Errorf("nomad health check failed: %w", err)
 	}
 	return nil
+}
+
+// releaseBuildLock releases the build lock for a job if it has one
+func (nc *Client) releaseBuildLock(job *types.Job) {
+	if job.LockKey != "" && job.LockSessionID != "" {
+		if err := nc.storage.ReleaseLock(job.LockKey, job.LockSessionID); err != nil {
+			nc.logger.WithError(err).WithFields(logrus.Fields{
+				"job_id":     job.ID,
+				"lock_key":   job.LockKey,
+				"session_id": job.LockSessionID,
+			}).Warn("Failed to release build lock")
+		} else {
+			nc.logger.WithFields(logrus.Fields{
+				"job_id":     job.ID,
+				"lock_key":   job.LockKey,
+				"session_id": job.LockSessionID,
+			}).Info("Build lock released successfully")
+			// Clear lock information from job
+			job.LockKey = ""
+			job.LockSessionID = ""
+		}
+	}
 }
 
 // Private helper methods

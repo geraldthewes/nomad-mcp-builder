@@ -159,6 +159,21 @@ A build submission request from the agent could look like this:
 * **Publish Phase:** Retags temporary image and pushes to final destination.
 * **Cleanup:** Removes temporary images after job completion or failure.
 
+#### FR8.1: Concurrency Control and Registry Protection
+
+* **Branch-Based Isolation:** Temporary images include branch names to prevent conflicts: `<registry>/bdtemp-imagename:branch-job-id`
+  * Different branches can build the same image concurrently
+  * Same branch builds are mutually exclusive to prevent corruption
+* **Distributed Locking:** Consul-based distributed locks prevent concurrent builds of the same image on the same branch
+  * Lock key format: `image-registry-imagename-branch`
+  * 30-minute timeout with automatic session-based cleanup
+  * Acquired before build starts, released on completion/failure
+* **Registry Corruption Prevention:**
+  * Single-phase builds (build-only, no tests) share the same locking mechanism as 3-phase builds
+  * Publish operations are mutually exclusive for the same final image
+  * Automatic lock cleanup on job completion, failure, or service crash
+* **Implementation:** Uses Consul's native session-based distributed locking for robust, crash-resistant mutual exclusion
+
 #### FR9: Monitoring and Metrics
 
 * **Prometheus Metrics:** Expose metrics on `/metrics` endpoint including:

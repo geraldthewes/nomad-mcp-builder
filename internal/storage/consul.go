@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/sirupsen/logrus"
-	
+
 	"nomad-mcp-builder/pkg/types"
 )
 
@@ -264,4 +265,106 @@ func (cs *ConsulStorage) Health() error {
 		return fmt.Errorf("consul health check failed: %w", err)
 	}
 	return nil
+}
+
+// AcquireLock acquires a distributed lock for the given key
+// Returns a session ID that must be used to release the lock
+func (cs *ConsulStorage) AcquireLock(lockKey string, timeout time.Duration) (string, error) {
+	cs.logger.WithField("lock_key", lockKey).Debug("Attempting to acquire lock")
+	
+	// Create a session for the lock
+	session := &consulapi.SessionEntry{
+		TTL:      timeout.String(),
+		Behavior: consulapi.SessionBehaviorRelease,
+		Name:     fmt.Sprintf("build-lock-%s", lockKey),
+	}
+	
+	sessionID, _, err := cs.client.Session().Create(session, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create session for lock: %w", err)
+	}
+	
+	cs.logger.WithFields(logrus.Fields{
+		"lock_key":   lockKey,
+		"session_id": sessionID,
+	}).Debug("Session created for lock")
+	
+	// Try to acquire the lock
+	fullKey := fmt.Sprintf("%s/locks/%s", cs.keyPrefix, lockKey)
+	pair := &consulapi.KVPair{
+		Key:     fullKey,
+		Value:   []byte(sessionID),
+		Session: sessionID,
+	}
+	
+	// Use the Acquire method which is atomic
+	acquired, _, err := cs.client.KV().Acquire(pair, nil)
+	if err != nil {
+		// Clean up session if acquire failed
+		cs.client.Session().Destroy(sessionID, nil)
+		return "", fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	
+	if !acquired {
+		// Lock is held by someone else, clean up session
+		cs.client.Session().Destroy(sessionID, nil)
+		return "", fmt.Errorf("lock is already held by another process")
+	}
+	
+	cs.logger.WithFields(logrus.Fields{
+		"lock_key":   lockKey,
+		"session_id": sessionID,
+	}).Info("Lock acquired successfully")
+	
+	return sessionID, nil
+}
+
+// ReleaseLock releases a distributed lock using the session ID
+func (cs *ConsulStorage) ReleaseLock(lockKey, sessionID string) error {
+	cs.logger.WithFields(logrus.Fields{
+		"lock_key":   lockKey,
+		"session_id": sessionID,
+	}).Debug("Releasing lock")
+	
+	// First, release the key from the session
+	fullKey := fmt.Sprintf("%s/locks/%s", cs.keyPrefix, lockKey)
+	pair := &consulapi.KVPair{
+		Key:     fullKey,
+		Session: sessionID,
+	}
+	
+	// Use the Release method which is atomic
+	released, _, err := cs.client.KV().Release(pair, nil)
+	if err != nil {
+		cs.logger.WithError(err).Warn("Failed to release lock key")
+	} else if !released {
+		cs.logger.Warn("Lock key was not held by this session")
+	}
+	
+	// Always destroy the session to clean up
+	_, err = cs.client.Session().Destroy(sessionID, nil)
+	if err != nil {
+		cs.logger.WithError(err).Warn("Failed to destroy session")
+		return fmt.Errorf("failed to destroy session: %w", err)
+	}
+	
+	cs.logger.WithFields(logrus.Fields{
+		"lock_key":   lockKey,
+		"session_id": sessionID,
+	}).Info("Lock released successfully")
+	
+	return nil
+}
+
+// GenerateImageLockKey generates a consistent lock key for image builds
+func (cs *ConsulStorage) GenerateImageLockKey(registryURL, imageName, branch string) string {
+	// Sanitize components for use in lock key
+	sanitizedRegistry := strings.ToLower(strings.ReplaceAll(registryURL, "/", "-"))
+	sanitizedImage := strings.ToLower(strings.ReplaceAll(imageName, "/", "-"))
+	sanitizedBranch := strings.ToLower(strings.ReplaceAll(branch, "/", "-"))
+	
+	// Create a consistent lock key that includes registry, image, and branch
+	// This allows different branches to build concurrently but prevents
+	// concurrent builds of the same image on the same branch
+	return fmt.Sprintf("image-%s-%s-%s", sanitizedRegistry, sanitizedImage, sanitizedBranch)
 }

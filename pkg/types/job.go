@@ -236,6 +236,10 @@ type Job struct {
 	// Error information
 	Error string `json:"error,omitempty"`
 	FailedPhase string `json:"failed_phase,omitempty"`
+
+	// Distributed locking information
+	LockKey       string `json:"lock_key,omitempty"`
+	LockSessionID string `json:"lock_session_id,omitempty"`
 }
 
 // JobLogs contains logs for each phase of the build

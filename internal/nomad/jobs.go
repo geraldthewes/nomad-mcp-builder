@@ -768,19 +768,30 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-// generateTempImageName creates the temporary image name with improved naming scheme
-// Format: registry.url/bdtemp-imagename:job-id
-// This ensures each project has its own temporary namespace with job ID as tag
+// generateTempImageName creates the temporary image name with branch-based isolation
+// Format: registry.url/bdtemp-imagename:branch-job-id
+// This ensures builds on different branches don't conflict, but same branch builds are prevented
 func (nc *Client) generateTempImageName(job *types.Job) string {
 	// Sanitize image name for use in registry path (remove special chars, make lowercase)
 	sanitizedImageName := strings.ToLower(strings.ReplaceAll(job.Config.ImageName, "/", "-"))
 	sanitizedImageName = strings.ReplaceAll(sanitizedImageName, "_", "-")
 
+	// Sanitize branch name for use in image tag (remove special chars, limit length)
+	sanitizedBranch := strings.ToLower(job.Config.GitRef)
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "/", "-")
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "_", "-")
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, ".", "-")
+	// Limit branch name length to avoid registry tag limits (max 128 chars)
+	if len(sanitizedBranch) > 50 {
+		sanitizedBranch = sanitizedBranch[:50]
+	}
+
 	tempPrefix := fmt.Sprintf("%s-%s", nc.config.Build.RegistryConfig.TempPrefix, sanitizedImageName)
 
-	return fmt.Sprintf("%s/%s:%s",
+	return fmt.Sprintf("%s/%s:%s-%s",
 		nc.config.Build.RegistryConfig.URL,
 		tempPrefix,
+		sanitizedBranch,
 		job.ID)
 }
 

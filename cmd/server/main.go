@@ -66,7 +66,7 @@ func main() {
 	logger.Info("Connected to Consul successfully")
 	
 	// Initialize Nomad client
-	nomadClient, err := nomad.NewClient(cfg)
+	nomadClient, err := nomad.NewClient(cfg, consulStorage)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize Nomad client")
 	}

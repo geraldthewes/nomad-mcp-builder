@@ -48,7 +48,7 @@ func TestMCPServerIntegration(t *testing.T) {
 	}
 	
 	// Create Nomad client
-	nomadClient, err := nomad.NewClient(cfg)
+	nomadClient, err := nomad.NewClient(cfg, storage)
 	if err != nil {
 		t.Fatalf("Failed to create Nomad client: %v", err)
 	}
