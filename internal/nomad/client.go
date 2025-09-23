@@ -175,6 +175,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		switch buildStatus {
 		case "running":
 			job.Status = types.StatusBuilding
+			job.CurrentPhase = "build"
 		case "complete":
 			// Build completed, capture logs before they disappear
 			if err := nc.capturePhaseLogs(job, "build"); err != nil {
@@ -194,6 +195,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 				// No tests configured - build pushed directly to final tags, mark as succeeded
 				nc.logger.WithField("job_id", job.ID).Info("Build completed with no tests configured, marking job as succeeded")
 				job.Status = types.StatusSucceeded
+				job.CurrentPhase = "build"
 				job.FinishedAt = &now
 				job.Metrics.JobEnd = &now
 				// Calculate total duration
@@ -212,6 +214,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 					
 					if err := nc.startTestPhase(job); err != nil {
 						job.Status = types.StatusFailed
+						job.CurrentPhase = "build"
 						job.Error = fmt.Sprintf("Failed to start test phase: %v", err)
 						job.FinishedAt = &now
 						job.Metrics.JobEnd = &now
@@ -219,6 +222,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 						nc.releaseBuildLock(job)
 					} else {
 						job.Status = types.StatusTesting
+						job.CurrentPhase = "test"
 						job.Metrics.TestStart = &now
 					}
 				}
@@ -230,6 +234,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			
 			job.Status = types.StatusFailed
+			job.CurrentPhase = "build"
 			job.FailedPhase = "build"
 			// Get detailed error information
 			errorMsg, err := nc.getJobErrorDetails(job.BuildJobID)
@@ -282,6 +287,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		// Update job status based on test job states
 		if anyRunning {
 			job.Status = types.StatusTesting
+			job.CurrentPhase = "test"
 		} else if anyFailed {
 			// If any test failed, capture logs from all test jobs before they disappear
 			if err := nc.capturePhaseLogs(job, "test"); err != nil {
@@ -289,6 +295,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			
 			job.Status = types.StatusFailed
+			job.CurrentPhase = "test"
 			job.FailedPhase = "test"
 			// Get detailed error information from the failed job
 			errorMsg, err := nc.getJobErrorDetails(failedJobID)
@@ -325,6 +332,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			if job.Status == types.StatusTesting {
 				if err := nc.startPublishPhase(job); err != nil {
 					job.Status = types.StatusFailed
+					job.CurrentPhase = "test"
 					job.Error = fmt.Sprintf("Failed to start publish phase: %v", err)
 					job.FinishedAt = &now
 					job.Metrics.JobEnd = &now
@@ -332,6 +340,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 					nc.releaseBuildLock(job)
 				} else {
 					job.Status = types.StatusPublishing
+					job.CurrentPhase = "publish"
 					job.Metrics.PublishStart = &now
 				}
 			}
@@ -348,6 +357,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 		switch publishStatus {
 		case "running":
 			job.Status = types.StatusPublishing
+			job.CurrentPhase = "publish"
 		case "complete":
 			// Publish completed, capture logs before they disappear
 			if err := nc.capturePhaseLogs(job, "publish"); err != nil {
@@ -355,6 +365,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			
 			job.Status = types.StatusSucceeded
+			job.CurrentPhase = "publish"
 			now := time.Now()
 			job.FinishedAt = &now
 
@@ -380,6 +391,7 @@ func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 			}
 			
 			job.Status = types.StatusFailed
+			job.CurrentPhase = "publish"
 			job.FailedPhase = "publish"
 			// Get detailed error information
 			errorMsg, err := nc.getJobErrorDetails(job.PublishJobID)

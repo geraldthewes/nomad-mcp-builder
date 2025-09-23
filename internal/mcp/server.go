@@ -971,6 +971,30 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 		jobConfig.ResourceLimits = resourceLimits
 	}
 
+	// Parse webhook configuration
+	if webhookURL, ok := args["webhook_url"].(string); ok {
+		jobConfig.WebhookURL = webhookURL
+	}
+	if webhookSecret, ok := args["webhook_secret"].(string); ok {
+		jobConfig.WebhookSecret = webhookSecret
+	}
+	if webhookOnSuccess, ok := args["webhook_on_success"].(bool); ok {
+		jobConfig.WebhookOnSuccess = webhookOnSuccess
+	}
+	if webhookOnFailure, ok := args["webhook_on_failure"].(bool); ok {
+		jobConfig.WebhookOnFailure = webhookOnFailure
+	}
+
+	// Parse webhook headers
+	if headersInterface, ok := args["webhook_headers"].(map[string]interface{}); ok {
+		jobConfig.WebhookHeaders = make(map[string]string)
+		for key, value := range headersInterface {
+			if valueStr, ok := value.(string); ok {
+				jobConfig.WebhookHeaders[key] = valueStr
+			}
+		}
+	}
+
 	// Validate job config using the same validation as web interface
 	if err := validateJobConfig(&jobConfig); err != nil {
 		return NewMCPErrorResponse(id, MCPErrorInvalidParams, "Job configuration validation failed", err.Error())
@@ -1421,8 +1445,11 @@ func (s *Server) sendWebhook(job *types.Job, event types.WebhookEvent) {
 		Phase:     job.CurrentPhase,
 	}
 	
-	if job.StartTime != nil && job.EndTime != nil {
-		payload.Duration = job.EndTime.Sub(*job.StartTime)
+	// Calculate duration using job start/end times
+	if job.StartedAt != nil && job.FinishedAt != nil {
+		payload.Duration = job.FinishedAt.Sub(*job.StartedAt)
+	} else if job.Metrics.JobStart != nil && job.Metrics.JobEnd != nil {
+		payload.Duration = job.Metrics.JobEnd.Sub(*job.Metrics.JobStart)
 	}
 	
 	if job.Status == types.StatusFailed && job.Error != "" {

@@ -142,6 +142,9 @@ docker-push: docker-build version-tag ## Push Docker image to registry and creat
 	@docker tag ${IMAGE_NAME}:${VERSION} ${DOCKER_TAG}
 	@docker push ${DOCKER_TAG}
 	@echo "Docker image pushed: ${DOCKER_TAG}"
+	@docker tag ${IMAGE_NAME}:${VERSION} ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest
+	@docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest
+	@echo "Docker image also pushed as: ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest"
 	@echo "Version v${VERSION} tagged locally"
 
 docker-run: ## Run Docker container locally
