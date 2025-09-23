@@ -8,6 +8,8 @@
 
 Nomad Build Service is a lightweight, stateless, MCP-based server written in Golang that enables coding agents to submit Docker image build jobs remotely. It orchestrates builds, tests, and publishes using Nomad as the backend infrastructure, ensuring all operations (server, builds, tests) run as Nomad jobs. The service uses Buildah for daemonless image building from Dockerfiles in git repos, supports test execution with network access, provides detailed build logs for error analysis, and publishes successful images to Docker private registries.
 
+**Important**: The service implements graceful job termination to prevent corruption during Docker and registry operations. Users must NEVER use direct Nomad job commands (`nomad job stop`, `nomad job deregister`, etc.) to terminate build service jobs. Always use the service's `killJob` MCP endpoint instead.
+
 This product is designed for agentic code development, offloading resource-intensive builds to remote Nomad clusters while empowering agents to debug failures autonomously through accessible logs.
 
 ### 1.2 Target Audience
@@ -128,9 +130,15 @@ A build submission request from the agent could look like this:
 * Please be clear if any infrastructure is required for storing the logs (example prometheus.)  
 * **Actionable Error Reporting:** On failure, the MCP response should clearly indicate the failed phase and provide direct access to its logs. The goal is to give the agent all necessary information to self-correct.
 
-#### FR6: Ability to kill a job 
+#### FR6: Graceful Job Termination
 
-* **Killing a Job**: The agent or the user should be able to kill  a build or test job at any time.
+* **Killing a Job**: The agent or the user should be able to kill a build or test job at any time.
+* **Graceful Termination**: The `killJob` command implements graceful termination to prevent corruption of Docker and registry operations:
+  * During build phase: Allows current build operations to complete before stopping (prevents corrupted images)
+  * During test phase: Safely terminates test containers without affecting other phases
+  * During publish phase: Allows registry push operations to complete before stopping (prevents corrupted registry state)
+  * Fallback: If graceful stop fails, the system will force termination as a last resort
+* **Important**: Callers must NEVER use direct Nomad job commands (`nomad job stop`, etc.) to terminate build service jobs, as this bypasses graceful termination safeguards. Always use the `killJob` MCP endpoint instead.
 
 #### FR7: Query and Streaming Endpoints
 
