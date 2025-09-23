@@ -31,73 +31,119 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	// Determine if we should skip tests (no tests configured)
 	skipTests := len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint
 	
-	var buildImageName string
+	var buildImageNames []string
 	var pushCommands []string
 	
 	if skipTests {
-		// No tests - build with temporary name but push directly to final image tags
-		buildImageName = nc.generateTempImageName(job)
+		// No tests - build directly with final image names and push to final registry
 		baseImageName := fmt.Sprintf("%s/%s", job.Config.RegistryURL, job.Config.ImageName)
 		
-		// Push commands for each final tag
+		// Build with final image names directly
 		for _, tag := range job.Config.ImageTags {
 			finalImageName := fmt.Sprintf("%s:%s", baseImageName, tag)
+			buildImageNames = append(buildImageNames, finalImageName)
+		}
+		
+		// Push commands for each final tag
+		for _, imageName := range buildImageNames {
 			pushCommands = append(pushCommands, 
-				fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", buildImageName, finalImageName))
+				fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", imageName, imageName))
 		}
 	} else {
 		// Tests configured - use temporary image name and push to temp registry
-		buildImageName = nc.generateTempImageName(job)
+		tempImageName := nc.generateTempImageName(job)
+		buildImageNames = []string{tempImageName}
 		pushCommands = []string{
-			fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", buildImageName, buildImageName),
+			fmt.Sprintf("buildah push --tls-verify=true %s docker://%s", tempImageName, tempImageName),
 		}
 	}
+	
+	// Create isolated cache directory for this project to prevent tag contamination
+	sanitizedImageName := strings.ToLower(strings.ReplaceAll(job.Config.ImageName, "/", "-"))
+	sanitizedImageName = strings.ReplaceAll(sanitizedImageName, "_", "-")
+	isolatedCacheDir := fmt.Sprintf("/var/lib/containers/%s", sanitizedImageName)
 	
 	// Build the task commands with layer caching and proper HTTPS handling
 	buildCommands := []string{
 		"#!/bin/bash",
 		"set -euo pipefail",
 		"",
-		"# Pre-build cache management",
-		"echo 'Managing build cache before build...'",
+		"# Cache isolation setup",
+		"echo 'Setting up isolated build cache...'",
+		fmt.Sprintf("mkdir -p %s %s/tmp", isolatedCacheDir, isolatedCacheDir),
 		"",
-		"# Check buildah storage space usage",
-		"echo 'Current buildah storage usage:'",
-		"du -sh /var/lib/containers 2>/dev/null || echo 'Storage directory not yet created'",
-		"",
-		"# Clean up old/unused images if storage is getting full",
-		"STORAGE_SIZE=$(du -s /var/lib/containers 2>/dev/null | cut -f1 || echo '0')",
-		"STORAGE_LIMIT=8000000  # 8GB in KB",
-		"if [ \"$STORAGE_SIZE\" -gt \"$STORAGE_LIMIT\" ]; then",
-		"  echo 'Storage usage approaching limit, cleaning up old images...'",
-		"  buildah rmi --prune --force 2>/dev/null || echo 'No old images to clean'",
-		"  buildah system prune --force 2>/dev/null || echo 'No system cache to clean'",
-		"else",
-		"  echo 'Storage usage within limits, skipping cleanup'",
-		"fi",
-		"",
+	}
+	
+	// Add aggressive cache clearing if requested
+	if job.Config.ClearCache {
+		buildCommands = append(buildCommands,
+			"# Clear cache requested - performing aggressive cleanup",
+			"echo 'Clearing build cache as requested...'",
+			"",
+			"# Remove isolated cache directory completely", 
+			fmt.Sprintf("rm -rf %s", isolatedCacheDir),
+			fmt.Sprintf("mkdir -p %s %s/tmp", isolatedCacheDir, isolatedCacheDir),
+			"",
+		)
+	} else {
+		buildCommands = append(buildCommands,
+			"# Standard cache management with isolation",
+			"# Check isolated cache space usage",
+			fmt.Sprintf("echo 'Current isolated cache usage for %s:'", sanitizedImageName),
+			fmt.Sprintf("du -sh %s 2>/dev/null || echo 'Isolated cache directory not yet created'", isolatedCacheDir),
+			"",
+			"# Clean up old/unused images in isolated cache if getting full",
+			fmt.Sprintf("STORAGE_SIZE=$(du -s %s 2>/dev/null | cut -f1 || echo '0')", isolatedCacheDir),
+			"STORAGE_LIMIT=4000000  # 4GB in KB per project",
+			"if [ \"$STORAGE_SIZE\" -gt \"$STORAGE_LIMIT\" ]; then",
+			"  echo 'Isolated cache approaching limit, cleaning up old images...'",
+			"  BUILDAH_ROOT=$(pwd) buildah rmi --prune --force 2>/dev/null || echo 'No old images to clean'",
+			"  BUILDAH_ROOT=$(pwd) buildah system prune --force 2>/dev/null || echo 'No system cache to clean'",
+			"else",
+			"  echo 'Isolated cache usage within limits, keeping layers'",
+			"fi",
+			"",
+		)
+	}
+	
+	// Add repository cloning and setup
+	buildCommands = append(buildCommands,
 		"# Clone repository", 
 		fmt.Sprintf("git clone %s /tmp/repo", job.Config.RepoURL),
 		"cd /tmp/repo",
 		fmt.Sprintf("git checkout %s", job.Config.GitRef),
 		"",
-		"# Ensure cache directories exist and have proper permissions",
-		"mkdir -p /var/lib/containers /var/lib/shared /var/lib/containers/tmp",
-		"",
-		"# Configure Buildah for layer caching",
+		"# Configure Buildah for isolated layer caching",
 		"export STORAGE_DRIVER=overlay",
 		"export BUILDAH_LAYERS=true",  // Enable layer caching by default
+		fmt.Sprintf("export BUILDAH_ROOT=%s", isolatedCacheDir), // Use isolated cache
+		fmt.Sprintf("export TMPDIR=%s/tmp", isolatedCacheDir), // Use isolated tmp
 		"",
-		"# Build image with Buildah using layer caching",
-		fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
-			job.Config.DockerfilePath, buildImageName),
+	)
+	
+	// Add build commands for each image name
+	if skipTests {
+		buildCommands = append(buildCommands, "# Build directly with final image names (no tests configured)")
+		for _, imageName := range buildImageNames {
+			buildCommands = append(buildCommands,
+				fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
+					job.Config.DockerfilePath, imageName))
+		}
+	} else {
+		buildCommands = append(buildCommands, "# Build with temporary image name for testing")
+		buildCommands = append(buildCommands,
+			fmt.Sprintf("buildah bud --isolation=chroot --layers --file %s --tag %s .", 
+				job.Config.DockerfilePath, buildImageNames[0]))
+	}
+	
+	buildCommands = append(buildCommands,
 		"",
 		"# Authenticate with registry if credentials are provided and non-empty",
 		"if [ -f /secrets/registry-creds ]; then",
 		"  source /secrets/registry-creds",
 		"  if [ -n \"$REGISTRY_USERNAME\" ] && [ -n \"$REGISTRY_PASSWORD\" ]; then",
 		"    echo 'Logging in to registry with credentials...'",
-		fmt.Sprintf("    buildah login --username \"$REGISTRY_USERNAME\" --password \"$REGISTRY_PASSWORD\" %s", registryHost(buildImageName)),
+		fmt.Sprintf("    buildah login --username \"$REGISTRY_USERNAME\" --password \"$REGISTRY_PASSWORD\" %s", registryHost(buildImageNames[0])),
 		"  else",
 		"    echo 'No registry credentials provided, attempting anonymous push...'",
 		"  fi",
@@ -108,7 +154,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 		"# Configure buildah to use TLS and mount certificates properly",
 		"export BUILDAH_TLS_VERIFY=true",
 		"",
-	}
+	)
 	
 	// Add push commands
 	if skipTests {
@@ -122,21 +168,29 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	buildCommands = append(buildCommands,
 		"",
 		"# Post-build cache management",
-		"echo 'Managing build cache after build...'",
+		"echo 'Managing isolated build cache after build...'",
 		"",
 		"# Clean up intermediate build containers (but keep layers for next builds)",
 		"buildah rm --all 2>/dev/null || echo 'No build containers to clean'",
 		"",
-		"# Remove our specific build image from local storage to save space",
-		"# (it's now in the registry, and we don't need it locally anymore)",
-		fmt.Sprintf("buildah rmi %s 2>/dev/null || echo 'Build image already removed'", buildImageName),
+		"# Remove our specific build images from local storage to save space",
+		"# (they're now in the registry, and we don't need them locally anymore)",
+	)
+	
+	// Remove each built image from local storage
+	for _, imageName := range buildImageNames {
+		buildCommands = append(buildCommands,
+			fmt.Sprintf("buildah rmi %s 2>/dev/null || echo 'Build image %s already removed'", imageName, imageName))
+	}
+	
+	buildCommands = append(buildCommands,
 		"",
 		"# Clean up any dangling/unused images older than this build",
 		"buildah image prune --filter \"until=1h\" --force 2>/dev/null || echo 'No old images to prune'",
 		"",
-		"# Show final storage usage",
-		"echo 'Final buildah storage usage:'",
-		"du -sh /var/lib/containers 2>/dev/null || echo 'Storage directory empty'",
+		"# Show final isolated cache usage",
+		fmt.Sprintf("echo 'Final isolated cache usage for %s:'", sanitizedImageName),
+		fmt.Sprintf("du -sh %s 2>/dev/null || echo 'Isolated cache directory empty'", isolatedCacheDir),
 		"",
 		"# Force sync file system to ensure all writes are committed",
 		"sync",
@@ -185,7 +239,6 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 							"STORAGE_DRIVER":    "overlay",
 							"BUILDAH_LAYERS":    "true", // Enable layer caching for large images
 							"BUILDAH_TLS_VERIFY": "true", // Enable TLS verification
-							"TMPDIR":            "/var/lib/containers/tmp", // Use persistent tmp for caching
 						},
 						Resources: &nomadapi.Resources{
 							CPU:      intPtr(cpu),

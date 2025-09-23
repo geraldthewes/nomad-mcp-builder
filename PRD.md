@@ -101,10 +101,12 @@ A build submission request from the agent could look like this:
 * The job task clones the specified Git repository and executes `buildah bud --file <path> --tag <temp> .`.  
 * **Build Caching:** The job mounts a shared, persistent host volume (e.g., `/opt/nomad/data/buildah-cache`) to enable Buildah's layer caching, significantly speeding up subsequent builds. Instructions will be provided on how to configure.  
 * If the build fails, the job terminates and logs the complete Buildah output for retrieval.
-
+* If there is a test is specified, a temporary build image is used so that publishing to the final image only occurs if the test suceeeds
+* If no test is specified than there is only a build phase and the build is published to  image specified in the job
 
 #### FR3: Test Phase
 
+* Only run if a test is configured in the job
 * If the build succeeds, separate Nomad batch jobs are spawned to run tests using the Docker driver directly.  
 * **Mode 1 - Custom Commands:** For each test command specified in `test_commands`, a separate Nomad job is created that runs the built image with Docker driver (`docker run <image> sh -c "<command>"`).
 * **Mode 2 - Entry Point Testing:** If `test_entry_point` is true, a Nomad job runs the built image directly without any command arguments, executing the image's default ENTRYPOINT/CMD.
@@ -115,6 +117,7 @@ A build submission request from the agent could look like this:
 
 #### FR4: Publish Phase
 
+* Only run if a test was specified and the test suceeded
 * If all tests pass, a final Nomad batch job pushes the image to the specified registry using `buildah push <temp> docker://<registry>/<repo>:<tag>`.  
 * Authentication is handled by Nomad injecting the referenced registry credentials from Vault into the job's environment.
 

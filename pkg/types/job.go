@@ -30,6 +30,7 @@ type JobConfig struct {
 	ResourceLimits          *ResourceLimits `json:"resource_limits,omitempty"`
 	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty"`
 	TestTimeout             *time.Duration  `json:"test_timeout,omitempty"`
+	ClearCache              bool     `json:"clear_cache,omitempty"`  // Clear build cache before building
 }
 
 // PhaseResourceLimits defines resource constraints for a single phase

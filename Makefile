@@ -5,18 +5,18 @@ BINARY_NAME=nomad-build-service
 IMAGE_NAME=nomad-build-service
 
 # Versioning - automatically increment patch version
-LATEST_TAG=$(shell git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -1)
+LATEST_TAG := $(shell git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -1)
 ifeq ($(LATEST_TAG),)
 	# No version tags exist, start with v0.0.1
-	VERSION?=0.0.1
+	VERSION := 0.0.1
 else
 	# Extract current version and increment patch
-	CURRENT_VERSION=$(shell echo $(LATEST_TAG) | sed 's/^v//')
-	MAJOR=$(shell echo $(CURRENT_VERSION) | cut -d. -f1)
-	MINOR=$(shell echo $(CURRENT_VERSION) | cut -d. -f2)
-	PATCH=$(shell echo $(CURRENT_VERSION) | cut -d. -f3)
-	NEXT_PATCH=$(shell echo $$(($(PATCH) + 1)))
-	VERSION?=$(MAJOR).$(MINOR).$(NEXT_PATCH)
+	CURRENT_VERSION := $(shell echo $(LATEST_TAG) | sed 's/^v//')
+	MAJOR := $(shell echo $(CURRENT_VERSION) | cut -d. -f1)
+	MINOR := $(shell echo $(CURRENT_VERSION) | cut -d. -f2)
+	PATCH := $(shell echo $(CURRENT_VERSION) | cut -d. -f3)
+	NEXT_PATCH := $(shell echo $$(($(PATCH) + 1)))
+	VERSION := $(MAJOR).$(MINOR).$(NEXT_PATCH)
 endif
 
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
@@ -142,7 +142,7 @@ docker-push: docker-build version-tag ## Push Docker image to registry and creat
 	@docker tag ${IMAGE_NAME}:${VERSION} ${DOCKER_TAG}
 	@docker push ${DOCKER_TAG}
 	@echo "Docker image pushed: ${DOCKER_TAG}"
-	@echo "Version v${VERSION} tagged and pushed to git"
+	@echo "Version v${VERSION} tagged locally"
 
 docker-run: ## Run Docker container locally
 	@echo "Running Docker container..."
@@ -233,23 +233,22 @@ version-info: ## Show current version information
 	@echo "Build time: ${BUILD_TIME}"
 	@echo "Git commit: ${GIT_COMMIT}"
 
-version-tag: ## Create and push version tag
-	@echo "Creating version tag: v${VERSION}"
+version-tag: ## Create local version tag
+	@echo "Creating local version tag: v${VERSION}"
 	@git tag -a v${VERSION} -m "Release version ${VERSION}"
-	@git push origin v${VERSION}
-	@echo "Version v${VERSION} tagged and pushed"
+	@echo "Version v${VERSION} tagged locally"
 
 version-major: ## Set major version (use: make version-major MAJOR=1)
 	@if [ -z "$(MAJOR)" ]; then echo "Usage: make version-major MAJOR=X"; exit 1; fi
 	@echo "Setting major version to $(MAJOR).0.0"
 	@git tag -a v$(MAJOR).0.0 -m "Major release version $(MAJOR).0.0"
-	@git push origin v$(MAJOR).0.0
+	@echo "Major version v$(MAJOR).0.0 tagged locally"
 
 version-minor: ## Set minor version (use: make version-minor MINOR=1)
 	@if [ -z "$(MINOR_VER)" ]; then echo "Usage: make version-minor MINOR_VER=X"; exit 1; fi
 	@echo "Setting minor version to $(MAJOR).$(MINOR_VER).0"
 	@git tag -a v$(MAJOR).$(MINOR_VER).0 -m "Minor release version $(MAJOR).$(MINOR_VER).0"
-	@git push origin v$(MAJOR).$(MINOR_VER).0
+	@echo "Minor version v$(MAJOR).$(MINOR_VER).0 tagged locally"
 
 # Installation targets
 install: build ## Install binary to system
@@ -264,10 +263,10 @@ uninstall: ## Uninstall binary from system
 	@echo "Uninstallation completed"
 
 # Release targets
-tag: ## Create git tag (requires VERSION variable)
-	@echo "Creating git tag: v${VERSION}"
+tag: ## Create local git tag (requires VERSION variable)
+	@echo "Creating local git tag: v${VERSION}"
 	@git tag -a v${VERSION} -m "Release version ${VERSION}"
-	@git push origin v${VERSION}
+	@echo "Git tag v${VERSION} created locally"
 
 release: clean test lint build-all docker-build docker-push ## Create a full release
 	@echo "Creating release ${VERSION}..."
