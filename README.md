@@ -261,6 +261,229 @@ plugin "docker" {
 
 - `GET /metrics` - Prometheus metrics (default port 9090)
 
+## Command Line Tool
+
+The project includes a `nomad-build` CLI tool that provides the same functionality as the web API in a convenient command-line interface.
+
+### Building the CLI Tool
+
+```bash
+# Build the CLI tool
+go build -o nomad-build ./cmd/nomad-build
+```
+
+### CLI Usage
+
+```
+nomad-build - CLI client for nomad build service
+
+Usage:
+  nomad-build [flags] <command> [args...]
+
+Commands:
+  submit-job <json>     Submit a new build job (JSON from arg or stdin)
+  get-status <job-id>   Get status of a job
+  get-logs <job-id> [phase]  Get logs for a job (optional phase: build, test, publish)
+  kill-job <job-id>     Kill a running job
+  cleanup <job-id>      Clean up resources for a job
+  get-history [limit] [offset]  Get job history (optional limit, optional offset)
+
+Flags:
+  -h, --help           Show this help message
+  -u, --url <url>      Service URL (default: http://localhost:8080)
+                       Can also be set via NOMAD_BUILD_URL environment variable
+```
+
+### CLI Examples
+
+#### Submit a Build Job
+
+**From command line argument:**
+```bash
+nomad-build submit-job '{
+  "owner": "myorg",
+  "repo_url": "https://github.com/myorg/myapp.git",
+  "git_ref": "main",
+  "dockerfile_path": "Dockerfile",
+  "image_name": "myapp",
+  "image_tags": ["v1.0", "latest"],
+  "registry_url": "registry.cluster:5000/myapp",
+  "test_entry_point": true
+}'
+```
+
+**From stdin (useful for scripts):**
+```bash
+echo '{
+  "owner": "myorg",
+  "repo_url": "https://github.com/myorg/myapp.git",
+  "git_ref": "main",
+  "dockerfile_path": "Dockerfile",
+  "image_name": "myapp",
+  "image_tags": ["v1.0"],
+  "registry_url": "registry.cluster:5000/myapp"
+}' | nomad-build submit-job
+```
+
+**From file:**
+```bash
+cat job-config.json | nomad-build submit-job
+```
+
+#### Check Job Status
+
+```bash
+nomad-build get-status abc123-def456-789
+```
+
+#### Get Job Logs
+
+```bash
+# Get all logs
+nomad-build get-logs abc123-def456-789
+
+# Get logs for specific phase
+nomad-build get-logs abc123-def456-789 build
+nomad-build get-logs abc123-def456-789 test
+nomad-build get-logs abc123-def456-789 publish
+```
+
+#### Kill a Running Job
+
+```bash
+nomad-build kill-job abc123-def456-789
+```
+
+#### Clean Up Job Resources
+
+```bash
+nomad-build cleanup abc123-def456-789
+```
+
+#### Get Job History
+
+```bash
+# Get last 10 jobs
+nomad-build get-history
+
+# Get specific number of jobs
+nomad-build get-history 20
+
+# Get jobs with offset (pagination)
+nomad-build get-history 10 20
+```
+
+### Service Discovery Integration
+
+The CLI tool automatically works with service discovery:
+
+```bash
+# Using Consul service discovery
+consul catalog service nomad-build-service
+# Service Address: 10.0.1.13:21855
+
+# Set environment variable for convenience
+export NOMAD_BUILD_URL=http://10.0.1.13:21855
+
+# Now all CLI commands will use the discovered service
+nomad-build get-history
+```
+
+### CLI Integration Examples
+
+#### CI/CD Pipeline Usage
+
+```bash
+#!/bin/bash
+# Build and deploy script
+
+# Set service URL from environment
+export NOMAD_BUILD_URL=${BUILD_SERVICE_URL}
+
+# Submit job from JSON file
+JOB_ID=$(cat build-config.json | nomad-build submit-job | jq -r '.job_id')
+echo "Build job submitted: $JOB_ID"
+
+# Wait for completion
+while true; do
+  STATUS=$(nomad-build get-status $JOB_ID | jq -r '.status')
+  echo "Current status: $STATUS"
+
+  if [[ "$STATUS" == "SUCCEEDED" ]]; then
+    echo "Build completed successfully!"
+    break
+  elif [[ "$STATUS" == "FAILED" ]]; then
+    echo "Build failed! Getting logs..."
+    nomad-build get-logs $JOB_ID
+    exit 1
+  fi
+
+  sleep 30
+done
+
+# Clean up
+nomad-build cleanup $JOB_ID
+```
+
+#### Monitoring Script
+
+```bash
+#!/bin/bash
+# Monitor build service
+
+export NOMAD_BUILD_URL=http://10.0.1.13:21855
+
+echo "Recent build history:"
+nomad-build get-history 5
+
+echo -e "\nRunning jobs:"
+nomad-build get-history 20 | jq '.jobs[] | select(.status == "BUILDING" or .status == "TESTING" or .status == "PUBLISHING") | {id: .id, status: .status, owner: .config.owner}'
+```
+
+### Go Library Usage
+
+The CLI tool is built on a reusable Go client library at `pkg/client`. You can use this library in your own Go applications:
+
+```go
+package main
+
+import (
+    "fmt"
+    "nomad-mcp-builder/pkg/client"
+    "nomad-mcp-builder/pkg/types"
+)
+
+func main() {
+    // Create client
+    c := client.NewClient("http://10.0.1.13:21855")
+
+    // Submit job
+    jobConfig := &types.JobConfig{
+        Owner:     "myorg",
+        RepoURL:   "https://github.com/myorg/myapp.git",
+        GitRef:    "main",
+        ImageName: "myapp",
+        ImageTags: []string{"v1.0"},
+        RegistryURL: "registry.cluster:5000/myapp",
+    }
+
+    response, err := c.SubmitJob(jobConfig)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Printf("Job submitted: %s\n", response.JobID)
+
+    // Check status
+    status, err := c.GetStatus(response.JobID)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Printf("Status: %s\n", status.Status)
+}
+```
+
 ## Resource Configuration
 
 Jobs can specify custom resource limits using the optional `resource_limits` parameter. If not specified, the following defaults are used:

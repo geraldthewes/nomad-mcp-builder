@@ -192,6 +192,50 @@ A build submission request from the agent could look like this:
 * **Access:** Available via `getHistory` endpoint for debugging.
 * **Cleanup:** Automatic removal of records older than 30 days.
 
+#### FR11: Command Line Interface (CLI) Tool
+
+* **Go Client Library:** A reusable Go client library (`pkg/client`) that wraps all service functionality, providing programmatic access to the build service API from Go applications.
+* **CLI Binary:** A standalone command-line tool (`nomad-build`) that provides complete access to all service functionality through a user-friendly interface.
+* **Dual Input Support:** The CLI must support JSON job configurations from both command-line arguments and stdin, enabling flexible integration with scripts and automation tools.
+* **Service Discovery Integration:** Automatic integration with Consul service discovery to locate the build service without hardcoding addresses.
+* **Environment Configuration:** Support for service URL configuration via `NOMAD_BUILD_URL` environment variable for CI/CD pipeline integration.
+* **Complete Feature Parity:** The CLI must provide access to all MCP functionality including:
+  * `submit-job` - Submit build jobs with JSON configuration
+  * `get-status` - Query job status with detailed metrics
+  * `get-logs` - Retrieve logs for all phases (build, test, publish) with optional phase filtering
+  * `kill-job` - Terminate running jobs gracefully
+  * `cleanup` - Clean up job resources and temporary artifacts
+  * `get-history` - Retrieve job history with pagination support
+* **Automation Friendly:** Structured JSON output for all commands to enable easy parsing by scripts and monitoring tools.
+* **Error Handling:** Comprehensive error messages with HTTP status codes and detailed error descriptions from the service.
+* **Documentation Integration:** Complete usage examples including CI/CD pipeline integration, monitoring scripts, and Go library usage patterns.
+
+#### FR11.1: CLI Command Interface
+
+The CLI tool provides the following command structure:
+
+```
+nomad-build [flags] <command> [args...]
+
+Commands:
+  submit-job <json>         Submit build job (JSON from argument or stdin)
+  get-status <job-id>       Get job status and metrics
+  get-logs <job-id> [phase] Get logs (all phases or specific: build, test, publish)
+  kill-job <job-id>         Terminate running job
+  cleanup <job-id>          Clean up job resources
+  get-history [limit] [offset] Get job history with pagination
+
+Flags:
+  -h, --help               Show help message
+  -u, --url <url>          Service URL (overrides NOMAD_BUILD_URL)
+```
+
+#### FR11.2: Integration Requirements
+
+* **CI/CD Pipeline Support:** The CLI must integrate seamlessly with automated build pipelines, supporting job submission from configuration files, status monitoring loops, and automatic cleanup on completion.
+* **Service Discovery:** Automatic discovery of the build service through Consul catalog API, eliminating the need for hardcoded service addresses in deployment scripts.
+* **Library Reusability:** The underlying Go client library must be independently usable for building custom integrations and tools that interact with the build service programmatically.
+
 ### 3.2 Non-Functional Requirements
 
 #### 
