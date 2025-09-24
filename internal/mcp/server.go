@@ -804,14 +804,41 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	encoder := json.NewEncoder(w)
 
+	// Log connection details for debugging
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"user_agent":  r.UserAgent(),
+		"content_length": r.ContentLength,
+	}).Debug("MCP stream connection established")
+
 	for {
 		var mcpReq MCPRequest
 		if err := decoder.Decode(&mcpReq); err != nil {
 			if err.Error() != "EOF" {
-				s.logger.WithError(err).Warn("Error decoding MCP stream request")
+				// Enhanced error logging with more context
+				s.logger.WithFields(map[string]interface{}{
+					"error":         err.Error(),
+					"remote_addr":   r.RemoteAddr,
+					"user_agent":    r.UserAgent(),
+					"content_type":  r.Header.Get("Content-Type"),
+					"content_length": r.ContentLength,
+					"connection":    r.Header.Get("Connection"),
+					"transfer_encoding": r.Header.Get("Transfer-Encoding"),
+				}).Warn("Error decoding MCP stream request")
+			} else {
+				s.logger.WithFields(map[string]interface{}{
+					"remote_addr": r.RemoteAddr,
+				}).Debug("MCP stream connection closed (EOF)")
 			}
 			break
 		}
+
+		// Log successful request decode for debugging
+		s.logger.WithFields(map[string]interface{}{
+			"method":      mcpReq.Method,
+			"request_id":  mcpReq.ID,
+			"remote_addr": r.RemoteAddr,
+		}).Debug("MCP stream request decoded successfully")
 
 		var response MCPResponse
 		switch mcpReq.Method {
@@ -829,7 +856,12 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 
 		// Send response immediately over the stream
 		if err := encoder.Encode(response); err != nil {
-			s.logger.WithError(err).Error("Failed to encode MCP stream response")
+			s.logger.WithFields(map[string]interface{}{
+				"error":       err.Error(),
+				"method":      mcpReq.Method,
+				"request_id":  mcpReq.ID,
+				"remote_addr": r.RemoteAddr,
+			}).Error("Failed to encode MCP stream response")
 			break
 		}
 		flusher.Flush()
