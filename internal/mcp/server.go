@@ -1559,11 +1559,11 @@ func (s *Server) generateWebhookSignature(payload []byte, secret string) string 
 func (s *Server) handleJobStatusChange(job *types.Job, oldStatus types.JobStatus, oldPhase string) {
 	newStatus := job.Status
 	newPhase := job.CurrentPhase
-	
+
 	// Determine the appropriate webhook event based on status and phase changes
 	var events []types.WebhookEvent
-	
-	// Phase-specific events
+
+	// Phase-specific events (only for phase transitions)
 	if newPhase != oldPhase {
 		switch newPhase {
 		case "build":
@@ -1574,38 +1574,46 @@ func (s *Server) handleJobStatusChange(job *types.Job, oldStatus types.JobStatus
 			if oldPhase != "test" {
 				events = append(events, types.WebhookEventTestStarted)
 			}
+		case "publish":
+			if oldPhase != "publish" {
+				events = append(events, types.WebhookEventPublishStarted)
+			}
 		}
 	}
-	
-	// Status-specific events
+
+	// Status-specific events (job completion/failure always takes priority)
 	if newStatus != oldStatus {
 		switch newStatus {
 		case types.StatusSucceeded:
-			// Job completed successfully
+			// Job completed successfully - always send job completion event
 			events = append(events, types.WebhookEventJobCompleted)
-			
-			// Also send phase completion events
+
+			// Also send phase completion events based on current phase
 			switch newPhase {
 			case "build":
 				events = append(events, types.WebhookEventBuildCompleted)
 			case "test":
 				events = append(events, types.WebhookEventTestCompleted)
+			case "publish":
+				events = append(events, types.WebhookEventPublishCompleted)
 			}
-			
+
 		case types.StatusFailed:
-			// Job failed
+			// Job failed - always send job failure event
 			events = append(events, types.WebhookEventJobFailed)
-			
-			// Also send phase failure events
+
+			// Also send phase failure events based on current phase
 			switch newPhase {
 			case "build":
 				events = append(events, types.WebhookEventBuildFailed)
 			case "test":
 				events = append(events, types.WebhookEventTestFailed)
+			case "publish":
+				events = append(events, types.WebhookEventPublishFailed)
 			}
 		}
 	}
-	
+
 	// Send all applicable webhook events
 	for _, event := range events {
 		s.sendWebhook(job, event)

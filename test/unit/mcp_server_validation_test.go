@@ -204,6 +204,11 @@ func TestMCPRestParameterParity(t *testing.T) {
 		"test_commands",
 		"test_entry_point",
 		"resource_limits",
+		"webhook_url",
+		"webhook_secret",
+		"webhook_on_success",
+		"webhook_on_failure",
+		"webhook_headers",
 	}
 
 	// Check that all expected parameters are defined in MCP schema

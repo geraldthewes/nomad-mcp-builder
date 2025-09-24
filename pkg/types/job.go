@@ -326,6 +326,9 @@ const (
 	WebhookEventTestStarted    WebhookEvent = "test.started"
 	WebhookEventTestCompleted  WebhookEvent = "test.completed"
 	WebhookEventTestFailed     WebhookEvent = "test.failed"
+	WebhookEventPublishStarted WebhookEvent = "publish.started"
+	WebhookEventPublishCompleted WebhookEvent = "publish.completed"
+	WebhookEventPublishFailed  WebhookEvent = "publish.failed"
 	WebhookEventJobCompleted   WebhookEvent = "job.completed"
 	WebhookEventJobFailed      WebhookEvent = "job.failed"
 )

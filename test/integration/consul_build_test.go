@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -452,6 +453,17 @@ func TestSequential(t *testing.T) {
 }
 
 // TestWebhookNotifications tests webhook notification functionality
+// getLocalIP returns the local IP address for webhook testing
+func getLocalIP() (string, error) {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String(), nil
+}
+
 func TestWebhookNotifications(t *testing.T) {
 	// Start webhook receiver
 	receiver := NewWebhookReceiver(8889)
@@ -470,7 +482,11 @@ func TestWebhookNotifications(t *testing.T) {
 	
 	// Prepare webhook configuration
 	webhookSecret := "test-secret-webhook-123"
-	webhookURL := "http://10.0.1.12:8889/webhook"
+	localIP, err := getLocalIP()
+	if err != nil {
+		t.Fatalf("Failed to get local IP: %v", err)
+	}
+	webhookURL := fmt.Sprintf("http://%s:8889/webhook", localIP)
 	
 	// Submit build job with webhook configuration
 	t.Log("Submitting build job with webhook configuration...")
@@ -510,21 +526,26 @@ func TestWebhookNotifications(t *testing.T) {
 	}
 	t.Logf("Job completed with status: %s", finalStatus)
 	
-	// Wait for webhook events (expect at least job completion event)
-	t.Log("Waiting for webhook events...")
-	if err := receiver.WaitForEvents(1, 30*time.Second); err != nil {
-		t.Fatalf("Failed to receive webhook events: %v", err)
-	}
+	// Wait a bit longer after job completion for final webhook event
+	t.Log("Waiting additional time for final webhook events...")
+	time.Sleep(10 * time.Second)
 	
 	// Analyze received events
 	events := receiver.GetEvents()
-	t.Logf("Received %d webhook events", len(events))
+	t.Logf("Received %d webhook events total", len(events))
+	
+	// Log all received events with detailed information
+	for i, event := range events {
+		t.Logf("Event %d: status=%s phase=%s timestamp=%s", 
+			i+1, 
+			event.Payload["status"], 
+			event.Payload["phase"],
+			event.Payload["timestamp"])
+	}
 	
 	// Validate webhook events
 	foundJobComplete := false
 	for i, event := range events {
-		t.Logf("Event %d: %s", i+1, event.Payload["status"])
-		
 		// Validate payload structure
 		if event.Payload["job_id"] != jobID {
 			t.Errorf("Event %d: Expected job_id %s, got %s", i+1, jobID, event.Payload["job_id"])
@@ -553,6 +574,7 @@ func TestWebhookNotifications(t *testing.T) {
 		// Check for job completion event
 		if event.Payload["status"] == "SUCCEEDED" {
 			foundJobComplete = true
+			t.Logf("Event %d: Found job completion event!", i+1)
 			
 			// Validate completion event has duration
 			if event.Payload["duration"] == nil {
@@ -581,11 +603,17 @@ func TestWebhookNotifications(t *testing.T) {
 	}
 	
 	t.Log("=== WEBHOOK TEST SUMMARY ===")
-	t.Logf("Status: PASSED")
+	if foundJobComplete {
+		t.Logf("Status: PASSED")
+	} else {
+		t.Logf("Status: FAILED - Missing job completion webhook")
+	}
 	t.Logf("Job ID: %s", jobID)
 	t.Logf("Webhook Events: %d", len(events))
 	t.Logf("Final Status: %s", finalStatus)
-	t.Log("Webhook notifications working correctly!")
+	if foundJobComplete {
+		t.Log("Webhook notifications working correctly!")
+	}
 }
 
 // discoverServiceURL discovers the nomad-build-service URL via Consul
