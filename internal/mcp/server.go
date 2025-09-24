@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -800,8 +801,6 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle bidirectional streaming
-	decoder := json.NewDecoder(r.Body)
 	encoder := json.NewEncoder(w)
 
 	// Log connection details for debugging
@@ -811,26 +810,82 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 		"content_length": r.ContentLength,
 	}).Debug("MCP stream connection established")
 
+	// Create a buffered reader to handle streaming JSON with debug logging
+	reader := bufio.NewReader(r.Body)
+
 	for {
-		var mcpReq MCPRequest
-		if err := decoder.Decode(&mcpReq); err != nil {
-			if err.Error() != "EOF" {
-				// Enhanced error logging with more context
-				s.logger.WithFields(map[string]interface{}{
-					"error":         err.Error(),
-					"remote_addr":   r.RemoteAddr,
-					"user_agent":    r.UserAgent(),
-					"content_type":  r.Header.Get("Content-Type"),
-					"content_length": r.ContentLength,
-					"connection":    r.Header.Get("Connection"),
-					"transfer_encoding": r.Header.Get("Transfer-Encoding"),
-				}).Warn("Error decoding MCP stream request")
-			} else {
-				s.logger.WithFields(map[string]interface{}{
-					"remote_addr": r.RemoteAddr,
-				}).Debug("MCP stream connection closed (EOF)")
+		// Buffer to capture raw request data for debugging
+		var rawData []byte
+		
+		// Read until we have what looks like a complete JSON object
+		braceCount := 0
+		inString := false
+		escaped := false
+		
+		for {
+			b, err := reader.ReadByte()
+			if err != nil {
+				if err.Error() == "EOF" {
+					if len(rawData) == 0 {
+						s.logger.WithFields(map[string]interface{}{
+							"remote_addr": r.RemoteAddr,
+						}).Debug("MCP stream connection closed (EOF)")
+						return
+					}
+				} else {
+					s.logger.WithFields(map[string]interface{}{
+						"error":         err.Error(),
+						"remote_addr":   r.RemoteAddr,
+						"user_agent":    r.UserAgent(),
+						"content_type":  r.Header.Get("Content-Type"),
+						"content_length": r.ContentLength,
+						"connection":    r.Header.Get("Connection"),
+						"transfer_encoding": r.Header.Get("Transfer-Encoding"),
+						"raw_data_len":  len(rawData),
+						"raw_data":      string(rawData),
+					}).Warn("Error reading MCP stream request")
+				}
+				return
 			}
-			break
+			
+			rawData = append(rawData, b)
+			
+			if !inString {
+				switch b {
+				case '{':
+					braceCount++
+				case '}':
+					braceCount--
+					if braceCount == 0 {
+						goto parseJSON
+					}
+				case '"':
+					inString = true
+				}
+			} else {
+				if b == '"' && !escaped {
+					inString = false
+				}
+				escaped = (b == '\\' && !escaped)
+			}
+		}
+
+	parseJSON:
+		// Now try to parse the captured JSON
+		var mcpReq MCPRequest
+		if err := json.Unmarshal(rawData, &mcpReq); err != nil {
+			s.logger.WithFields(map[string]interface{}{
+				"error":         err.Error(),
+				"remote_addr":   r.RemoteAddr,
+				"user_agent":    r.UserAgent(),
+				"content_type":  r.Header.Get("Content-Type"),
+				"content_length": r.ContentLength,
+				"connection":    r.Header.Get("Connection"),
+				"transfer_encoding": r.Header.Get("Transfer-Encoding"),
+				"raw_data_len":  len(rawData),
+				"raw_data":      string(rawData),
+			}).Warn("Error decoding MCP stream request")
+			continue // Try to read next JSON object
 		}
 
 		// Log successful request decode for debugging
@@ -838,6 +893,7 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 			"method":      mcpReq.Method,
 			"request_id":  mcpReq.ID,
 			"remote_addr": r.RemoteAddr,
+			"raw_data":    string(rawData),
 		}).Debug("MCP stream request decoded successfully")
 
 		var response MCPResponse
