@@ -747,17 +747,54 @@ func (s *Server) convertJobToHistory(job *types.Job) *types.JobHistory {
 
 // handleMCPRequest processes standard MCP JSON-RPC requests
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	
+	// Log incoming request in web server format
+	s.logger.WithFields(map[string]interface{}{
+		"method":         r.Method,
+		"uri":            r.RequestURI,
+		"remote_addr":    r.RemoteAddr,
+		"user_agent":     r.UserAgent(),
+		"content_length": r.ContentLength,
+		"content_type":   r.Header.Get("Content-Type"),
+	}).Info("MCP request received")
+
 	if r.Method != http.MethodPost {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusMethodNotAllowed,
+			"duration_ms":  duration.Milliseconds(),
+			"error":        "Method not allowed",
+		}).Info("MCP request completed")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var mcpReq MCPRequest
 	if err := json.NewDecoder(r.Body).Decode(&mcpReq); err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusBadRequest,
+			"duration_ms":  duration.Milliseconds(),
+			"error":        "Parse error: " + err.Error(),
+		}).Info("MCP request completed")
 		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
 		s.writeMCPResponse(w, response)
 		return
 	}
+
+	// Log the actual MCP method being called
+	s.logger.WithFields(map[string]interface{}{
+		"mcp_method":   mcpReq.Method,
+		"mcp_id":       mcpReq.ID,
+		"remote_addr":  r.RemoteAddr,
+	}).Info("MCP method call")
 
 	var response MCPResponse
 	switch mcpReq.Method {
@@ -771,11 +808,41 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
 	}
 
+	duration := time.Since(startTime)
+	statusCode := http.StatusOK
+	if response.Error != nil {
+		statusCode = http.StatusBadRequest
+	}
+	
+	s.logger.WithFields(map[string]interface{}{
+		"method":       r.Method,
+		"uri":          r.RequestURI,
+		"remote_addr":  r.RemoteAddr,
+		"status":       statusCode,
+		"duration_ms":  duration.Milliseconds(),
+		"mcp_method":   mcpReq.Method,
+		"mcp_id":       mcpReq.ID,
+		"mcp_success":  response.Error == nil,
+	}).Info("MCP request completed")
+
 	s.writeMCPResponse(w, response)
 }
 
 // handleMCPStream provides streamable HTTP transport for MCP Inspector and modern clients
 func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	requestCount := 0
+	
+	// Log initial stream connection in web server format
+	s.logger.WithFields(map[string]interface{}{
+		"method":         r.Method,
+		"uri":            r.RequestURI,
+		"remote_addr":    r.RemoteAddr,
+		"user_agent":     r.UserAgent(),
+		"content_length": r.ContentLength,
+		"content_type":   r.Header.Get("Content-Type"),
+	}).Info("MCP stream connection received")
+
 	// Set headers for streamable HTTP transport
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -786,34 +853,74 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 
 	// Handle preflight requests
 	if r.Method == http.MethodOptions {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusOK,
+			"duration_ms":  duration.Milliseconds(),
+		}).Info("MCP stream preflight completed")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	if r.Method != http.MethodPost {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusMethodNotAllowed,
+			"duration_ms":  duration.Milliseconds(),
+			"error":        "Method not allowed",
+		}).Info("MCP stream completed")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusInternalServerError,
+			"duration_ms":  duration.Milliseconds(),
+			"error":        "Streaming unsupported",
+		}).Info("MCP stream completed")
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
 	encoder := json.NewEncoder(w)
 
-	// Log connection details for debugging
+	// Log stream session established
 	s.logger.WithFields(map[string]interface{}{
 		"remote_addr": r.RemoteAddr,
 		"user_agent":  r.UserAgent(),
 		"content_length": r.ContentLength,
-	}).Debug("MCP stream connection established")
+	}).Info("MCP stream session established")
 
 	// Create a buffered reader to handle streaming JSON with debug logging
 	reader := bufio.NewReader(r.Body)
 
+	defer func() {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":        r.Method,
+			"uri":           r.RequestURI,
+			"remote_addr":   r.RemoteAddr,
+			"status":        http.StatusOK,
+			"duration_ms":   duration.Milliseconds(),
+			"requests_processed": requestCount,
+		}).Info("MCP stream session completed")
+	}()
+
 	for {
+		requestStartTime := time.Now()
+		
 		// Buffer to capture raw request data for debugging
 		var rawData []byte
 		
@@ -829,7 +936,7 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 					if len(rawData) == 0 {
 						s.logger.WithFields(map[string]interface{}{
 							"remote_addr": r.RemoteAddr,
-						}).Debug("MCP stream connection closed (EOF)")
+						}).Info("MCP stream connection closed (EOF)")
 						return
 					}
 				} else {
@@ -871,9 +978,12 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 	parseJSON:
+		requestCount++
+		
 		// Now try to parse the captured JSON
 		var mcpReq MCPRequest
 		if err := json.Unmarshal(rawData, &mcpReq); err != nil {
+			requestDuration := time.Since(requestStartTime)
 			s.logger.WithFields(map[string]interface{}{
 				"error":         err.Error(),
 				"remote_addr":   r.RemoteAddr,
@@ -884,17 +994,19 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 				"transfer_encoding": r.Header.Get("Transfer-Encoding"),
 				"raw_data_len":  len(rawData),
 				"raw_data":      string(rawData),
-			}).Warn("Error decoding MCP stream request")
+				"duration_ms":   requestDuration.Milliseconds(),
+				"request_num":   requestCount,
+			}).Warn("MCP stream request decode failed")
 			continue // Try to read next JSON object
 		}
 
-		// Log successful request decode for debugging
+		// Log individual MCP method call within stream
 		s.logger.WithFields(map[string]interface{}{
-			"method":      mcpReq.Method,
-			"request_id":  mcpReq.ID,
-			"remote_addr": r.RemoteAddr,
-			"raw_data":    string(rawData),
-		}).Debug("MCP stream request decoded successfully")
+			"mcp_method":   mcpReq.Method,
+			"mcp_id":       mcpReq.ID,
+			"remote_addr":  r.RemoteAddr,
+			"request_num":  requestCount,
+		}).Info("MCP stream method call")
 
 		var response MCPResponse
 		switch mcpReq.Method {
@@ -912,14 +1024,29 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 
 		// Send response immediately over the stream
 		if err := encoder.Encode(response); err != nil {
+			requestDuration := time.Since(requestStartTime)
 			s.logger.WithFields(map[string]interface{}{
-				"error":       err.Error(),
-				"method":      mcpReq.Method,
-				"request_id":  mcpReq.ID,
-				"remote_addr": r.RemoteAddr,
+				"error":         err.Error(),
+				"method":        mcpReq.Method,
+				"request_id":    mcpReq.ID,
+				"remote_addr":   r.RemoteAddr,
+				"duration_ms":   requestDuration.Milliseconds(),
+				"request_num":   requestCount,
 			}).Error("Failed to encode MCP stream response")
 			break
 		}
+		
+		// Log successful method completion
+		requestDuration := time.Since(requestStartTime)
+		s.logger.WithFields(map[string]interface{}{
+			"mcp_method":   mcpReq.Method,
+			"mcp_id":       mcpReq.ID,
+			"remote_addr":  r.RemoteAddr,
+			"duration_ms":  requestDuration.Milliseconds(),
+			"request_num":  requestCount,
+			"mcp_success":  response.Error == nil,
+		}).Info("MCP stream method completed")
+		
 		flusher.Flush()
 	}
 }
