@@ -20,7 +20,7 @@ Usage:
   nomad-build [flags] <command> [args...]
 
 Commands:
-  submit-job <json>     Submit a new build job (JSON from arg or stdin)
+  submit-job [--image-tags tag1,tag2,...] <json>     Submit a new build job (JSON from arg or stdin)
   get-status <job-id>   Get status of a job
   get-logs <job-id> [phase]  Get logs for a job (optional phase: build, test, publish)
   kill-job <job-id>     Kill a running job
@@ -31,10 +31,14 @@ Flags:
   -h, --help           Show this help message
   -u, --url <url>      Service URL (default: http://localhost:8080)
                        Can also be set via NOMAD_BUILD_URL environment variable
+  --image-tags <tags>  Additional image tags to append (comma-separated, submit-job only)
 
 Examples:
   # Submit job from command line argument
   nomad-build submit-job '{"owner":"test","repo_url":"https://github.com/example/repo.git","git_ref":"main","dockerfile_path":"Dockerfile","image_name":"test","image_tags":["v1.0"],"registry_url":"registry.example.com/test"}'
+
+  # Submit job with additional image tags
+  nomad-build submit-job --image-tags "v4.0.16,latest" '{"owner":"test","repo_url":"https://github.com/example/repo.git","git_ref":"main","dockerfile_path":"Dockerfile","image_name":"test","image_tags":["v1.0"],"registry_url":"registry.example.com/test"}'
 
   # Submit job from stdin
   echo '{"owner":"test",...}' | nomad-build submit-job
@@ -75,7 +79,9 @@ func run(args []string) error {
 	var command string
 	var commandArgs []string
 
-	for i, arg := range args {
+	i := 0
+	for i < len(args) {
+		arg := args[i]
 		if arg == "-h" || arg == "--help" {
 			fmt.Print(usage)
 			return nil
@@ -84,16 +90,16 @@ func run(args []string) error {
 				return fmt.Errorf("flag %s requires a value", arg)
 			}
 			serviceURL = args[i+1]
-			args = append(args[:i], args[i+2:]...)
-			break
+			i += 2
 		} else if strings.HasPrefix(arg, "--url=") {
 			serviceURL = strings.TrimPrefix(arg, "--url=")
-			args = append(args[:i], args[i+1:]...)
-			break
+			i++
 		} else if !strings.HasPrefix(arg, "-") {
 			command = arg
 			commandArgs = args[i+1:]
 			break
+		} else {
+			return fmt.Errorf("unknown flag: %s", arg)
 		}
 	}
 
@@ -107,6 +113,7 @@ func run(args []string) error {
 	// Execute command
 	switch command {
 	case "submit-job":
+		// Parse submit-job specific flags from commandArgs
 		return handleSubmitJob(c, commandArgs)
 	case "get-status":
 		return handleGetStatus(c, commandArgs)
@@ -131,13 +138,43 @@ func getServiceURL() string {
 }
 
 func handleSubmitJob(c *client.Client, args []string) error {
+	// Parse submit-job specific flags
+	var additionalImageTags []string
 	var jobJSON string
 
-	if len(args) > 0 {
-		// Get JSON from command line argument
-		jobJSON = args[0]
-	} else {
-		// Read JSON from stdin
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--image-tags" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("flag %s requires a value", arg)
+			}
+			tagStr := args[i+1]
+			additionalImageTags = strings.Split(tagStr, ",")
+			// Trim spaces from tags
+			for j, tag := range additionalImageTags {
+				additionalImageTags[j] = strings.TrimSpace(tag)
+			}
+			i += 2
+		} else if strings.HasPrefix(arg, "--image-tags=") {
+			tagStr := strings.TrimPrefix(arg, "--image-tags=")
+			additionalImageTags = strings.Split(tagStr, ",")
+			// Trim spaces from tags
+			for j, tag := range additionalImageTags {
+				additionalImageTags[j] = strings.TrimSpace(tag)
+			}
+			i++
+		} else if !strings.HasPrefix(arg, "-") {
+			// This is the JSON argument
+			jobJSON = arg
+			break
+		} else {
+			return fmt.Errorf("unknown flag: %s", arg)
+		}
+	}
+
+	// If no JSON from command line arguments, read from stdin
+	if jobJSON == "" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("failed to read from stdin: %w", err)
@@ -153,6 +190,20 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	var jobConfig types.JobConfig
 	if err := json.Unmarshal([]byte(jobJSON), &jobConfig); err != nil {
 		return fmt.Errorf("failed to parse job JSON: %w", err)
+	}
+
+	// Merge additional image tags if provided
+	if len(additionalImageTags) > 0 {
+		// Filter out empty tags
+		var validTags []string
+		for _, tag := range additionalImageTags {
+			if tag != "" {
+				validTags = append(validTags, tag)
+			}
+		}
+		if len(validTags) > 0 {
+			jobConfig.ImageTags = append(jobConfig.ImageTags, validTags...)
+		}
 	}
 
 	// Submit job
