@@ -1272,24 +1272,46 @@ func (s *Server) handleMCPToolsCall(req MCPRequest) MCPResponse {
 		arguments = make(map[string]interface{})
 	}
 
+	// Log the tool call with arguments for debugging
+	s.logger.WithFields(map[string]interface{}{
+		"tool_name": toolName,
+		"arguments": arguments,
+	}).Debug("MCP tool call received")
+
+	var response MCPResponse
 	switch toolName {
 	case "submitJob":
-		return s.mcpSubmitJob(req.ID, arguments)
+		response = s.mcpSubmitJob(req.ID, arguments)
 	case "getStatus":
-		return s.mcpGetStatus(req.ID, arguments)
+		response = s.mcpGetStatus(req.ID, arguments)
 	case "getLogs":
-		return s.mcpGetLogs(req.ID, arguments)
+		response = s.mcpGetLogs(req.ID, arguments)
 	case "killJob":
-		return s.mcpKillJob(req.ID, arguments)
+		response = s.mcpKillJob(req.ID, arguments)
 	case "cleanup":
-		return s.mcpCleanup(req.ID, arguments)
+		response = s.mcpCleanup(req.ID, arguments)
 	case "getHistory":
-		return s.mcpGetHistory(req.ID, arguments)
+		response = s.mcpGetHistory(req.ID, arguments)
 	case "purgeFailedJob":
-		return s.mcpPurgeFailedJob(req.ID, arguments)
+		response = s.mcpPurgeFailedJob(req.ID, arguments)
 	default:
-		return NewMCPErrorResponse(req.ID, MCPErrorMethodNotFound, "Tool not found", toolName)
+		response = NewMCPErrorResponse(req.ID, MCPErrorMethodNotFound, "Tool not found", toolName)
 	}
+
+	// Log the response for debugging
+	if response.Error != nil {
+		s.logger.WithFields(map[string]interface{}{
+			"tool_name": toolName,
+			"error":     response.Error,
+		}).Warn("MCP tool call failed")
+	} else {
+		s.logger.WithFields(map[string]interface{}{
+			"tool_name": toolName,
+			"result":    response.Result,
+		}).Debug("MCP tool call succeeded")
+	}
+
+	return response
 }
 
 // MCP Tool implementations (translate to existing internal methods)
@@ -1331,11 +1353,28 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 		jobConfig.RegistryCredentialsPath = "secret/nomad/jobs/registry-credentials"
 	}
 
-	// Convert image tags
-	if tagsInterface, ok := args["image_tags"].([]interface{}); ok {
-		for _, tag := range tagsInterface {
-			if tagStr, ok := tag.(string); ok {
-				jobConfig.ImageTags = append(jobConfig.ImageTags, tagStr)
+	// Convert image tags - handle multiple formats for compatibility
+	if tagsValue, exists := args["image_tags"]; exists {
+		// Try as array first (proper format)
+		if tagsArray, ok := tagsValue.([]interface{}); ok {
+			for _, tag := range tagsArray {
+				if tagStr, ok := tag.(string); ok {
+					jobConfig.ImageTags = append(jobConfig.ImageTags, tagStr)
+				}
+			}
+		} else if tagsString, ok := tagsValue.(string); ok {
+			// Handle string formats
+			if strings.HasPrefix(tagsString, "[") {
+				// Parse JSON array string like "[\"latest\", \"v1.0\"]"
+				var parsedTags []string
+				if err := json.Unmarshal([]byte(tagsString), &parsedTags); err == nil {
+					jobConfig.ImageTags = parsedTags
+				} else {
+					s.logger.WithError(err).Warn("Failed to parse image_tags JSON string")
+				}
+			} else {
+				// Treat as single tag
+				jobConfig.ImageTags = []string{tagsString}
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package unit
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"nomad-mcp-builder/internal/mcp"
@@ -146,6 +147,50 @@ func TestMCPServerValidationConsistency(t *testing.T) {
 				"image_tags":   []interface{}{"latest"},
 				"registry_url": "registry.example.com/test-app",
 				// git_ref and dockerfile_path should get defaults
+			},
+			expectError: false,
+		},
+		{
+			name: "image_tags_as_json_string_single",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   "[\"latest\"]",
+				"registry_url": "registry.example.com/test-app",
+			},
+			expectError: false,
+		},
+		{
+			name: "image_tags_as_json_string_multiple",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   "[\"latest\", \"v1.0.0\", \"v1.0.0-rc1\"]",
+				"registry_url": "registry.example.com/test-app",
+			},
+			expectError: false,
+		},
+		{
+			name: "image_tags_as_single_string",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   "latest",
+				"registry_url": "registry.example.com/test-app",
+			},
+			expectError: false,
+		},
+		{
+			name: "image_tags_as_single_string_with_version",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   "v1.2.3",
+				"registry_url": "registry.example.com/test-app",
 			},
 			expectError: false,
 		},
@@ -336,11 +381,26 @@ func convertMCPArgsToJobConfig(args map[string]interface{}) *types.JobConfig {
 		jobConfig.RegistryCredentialsPath = "secret/nomad/jobs/registry-credentials"
 	}
 
-	// Convert image tags
-	if tagsInterface, ok := args["image_tags"].([]interface{}); ok {
-		for _, tag := range tagsInterface {
-			if tagStr, ok := tag.(string); ok {
-				jobConfig.ImageTags = append(jobConfig.ImageTags, tagStr)
+	// Convert image tags - handle multiple formats for compatibility
+	if tagsValue, exists := args["image_tags"]; exists {
+		// Try as array first (proper format)
+		if tagsArray, ok := tagsValue.([]interface{}); ok {
+			for _, tag := range tagsArray {
+				if tagStr, ok := tag.(string); ok {
+					jobConfig.ImageTags = append(jobConfig.ImageTags, tagStr)
+				}
+			}
+		} else if tagsString, ok := tagsValue.(string); ok {
+			// Handle string formats
+			if strings.HasPrefix(tagsString, "[") {
+				// Parse JSON array string like "[\"latest\", \"v1.0\"]"
+				var parsedTags []string
+				if err := json.Unmarshal([]byte(tagsString), &parsedTags); err == nil {
+					jobConfig.ImageTags = parsedTags
+				}
+			} else {
+				// Treat as single tag
+				jobConfig.ImageTags = []string{tagsString}
 			}
 		}
 	}
