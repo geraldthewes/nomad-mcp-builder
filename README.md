@@ -180,6 +180,7 @@ curl -X POST http://localhost:8080/json/submitJob \
 |----------|---------|-------------|
 | `SERVER_HOST` | `0.0.0.0` | Server bind address |
 | `SERVER_PORT` | `8080` | Server port |
+| `CORS_ORIGIN` | `*` | CORS Access-Control-Allow-Origin header (use `*` for all origins or specific domain like `http://localhost:6274`) |
 | `NOMAD_ADDR` | `http://localhost:4646` | Nomad API address |
 | `NOMAD_REGION` | `global` | Nomad region name |
 | `NOMAD_DATACENTERS` | `cluster` | Nomad datacenters (comma-separated) |

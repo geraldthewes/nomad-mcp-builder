@@ -36,9 +36,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
-	TLS  bool   `json:"tls"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	TLS        bool   `json:"tls"`
+	CORSOrigin string `json:"cors_origin"` // CORS Access-Control-Allow-Origin header value
 }
 
 type NomadConfig struct {
@@ -103,9 +104,10 @@ type LoggingConfig struct {
 func Load() (*Config, error) {
 	config := &Config{
 		Server: ServerConfig{
-			Host: getEnv("SERVER_HOST", "0.0.0.0"),
-			Port: getEnvInt("SERVER_PORT", 8080),
-			TLS:  getEnvBool("SERVER_TLS", false),
+			Host:       getEnv("SERVER_HOST", "0.0.0.0"),
+			Port:       getEnvInt("SERVER_PORT", 8080),
+			TLS:        getEnvBool("SERVER_TLS", false),
+			CORSOrigin: getEnv("CORS_ORIGIN", "*"),
 		},
 		Nomad: NomadConfig{
 			Address:     getEnv("NOMAD_ADDR", "http://localhost:4646"),

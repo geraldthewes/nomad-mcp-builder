@@ -760,7 +760,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Handle CORS preflight
 	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Max-Age", "3600")
@@ -769,7 +769,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set CORS headers for actual request
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 
 	if r.Method != http.MethodPost {
 		duration := time.Since(startTime)
@@ -858,7 +858,7 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 
 	// Handle CORS preflight
 	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Max-Age", "3600")
@@ -867,7 +867,7 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Set CORS headers for actual request
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 
 	// Set headers for streamable HTTP transport
 	w.Header().Set("Content-Type", "application/json")
