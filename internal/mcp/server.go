@@ -808,6 +808,24 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		"remote_addr":  r.RemoteAddr,
 	}).Info("MCP method call")
 
+	// Handle notifications (JSON-RPC requests without id field)
+	// Notifications don't expect a response, just acknowledge with 200 OK
+	if mcpReq.ID == nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusOK,
+			"duration_ms":  duration.Milliseconds(),
+			"mcp_method":   mcpReq.Method,
+			"mcp_id":       mcpReq.ID,
+			"notification": true,
+		}).Info("MCP notification received")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	var response MCPResponse
 	switch mcpReq.Method {
 	case "tools/list":
@@ -825,7 +843,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	if response.Error != nil {
 		statusCode = http.StatusBadRequest
 	}
-	
+
 	s.logger.WithFields(map[string]interface{}{
 		"method":       r.Method,
 		"uri":          r.RequestURI,
