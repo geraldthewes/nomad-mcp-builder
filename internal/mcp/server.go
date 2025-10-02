@@ -747,7 +747,7 @@ func (s *Server) convertJobToHistory(job *types.Job) *types.JobHistory {
 // handleMCPRequest processes standard MCP JSON-RPC requests
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
-	
+
 	// Log incoming request in web server format
 	s.logger.WithFields(map[string]interface{}{
 		"method":         r.Method,
@@ -757,6 +757,19 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		"content_length": r.ContentLength,
 		"content_type":   r.Header.Get("Content-Type"),
 	}).Info("MCP request received")
+
+	// Handle CORS preflight
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "3600")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Set CORS headers for actual request
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	if r.Method != http.MethodPost {
 		duration := time.Since(startTime)
@@ -832,7 +845,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestCount := 0
-	
+
 	// Log initial stream connection in web server format
 	s.logger.WithFields(map[string]interface{}{
 		"method":         r.Method,
@@ -842,6 +855,19 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 		"content_length": r.ContentLength,
 		"content_type":   r.Header.Get("Content-Type"),
 	}).Info("MCP stream connection received")
+
+	// Handle CORS preflight
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "3600")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Set CORS headers for actual request
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Set headers for streamable HTTP transport
 	w.Header().Set("Content-Type", "application/json")
