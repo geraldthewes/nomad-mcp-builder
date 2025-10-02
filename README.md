@@ -36,25 +36,40 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 
 ## API Endpoints
 
-The service provides **three** distinct API interfaces:
+The service provides **two distinct API types** with multiple transport options:
 
 ### 1. MCP Protocol Endpoints (Agent/Tool Integration)
 
-**Streamable HTTP Transport** (2025-03-26 spec) - Recommended
-- **Endpoint:** `/stream`
-- **Transport:** Bidirectional HTTP streaming
-- **Use with:** MCP Inspector v0.17.0+, modern MCP clients
-- **Connection:** `http://localhost:8080/stream`
+The **Model Context Protocol (MCP)** is used for agent communication. This service supports **three MCP transport methods**:
 
-**Legacy SSE Transport** (2024-11-05 spec) - Backward compatibility
+#### a) Simple JSON-RPC over HTTP (Standard)
+- **Endpoint:** `/mcp`
+- **Transport:** Single request/response, standard JSON-RPC 2.0
+- **Use with:** MCP Inspector, most MCP clients, testing
+- **Connection:** `http://localhost:8080/mcp`
+- **Best for:** Simple integrations, debugging, MCP Inspector
+
+#### b) Streamable HTTP Transport (Modern)
+- **Endpoint:** `/stream`
+- **Transport:** Bidirectional HTTP streaming with chunked encoding
+- **Spec:** MCP 2025-03-26
+- **Use with:** Advanced MCP clients supporting streaming
+- **Connection:** `http://localhost:8080/stream`
+- **Best for:** High-performance streaming applications
+
+#### c) SSE Transport (Legacy)
 - **Endpoint:** `/sse`
 - **Transport:** Server-Sent Events (GET) + JSON-RPC (POST)
+- **Spec:** MCP 2024-11-05
 - **Use with:** Older MCP clients, mcp-cli
 - **Connection:** `http://localhost:8080/sse`
+- **Best for:** Backward compatibility
 
-### 2. JSON-RPC API (Custom, Non-MCP)
+**All three endpoints support the same MCP tools:** `submitJob`, `getStatus`, `getLogs`, `killJob`, `cleanup`, `getHistory`
 
-Direct HTTP/JSON endpoints for testing and integration:
+### 2. Custom JSON-RPC API (Non-MCP Protocol)
+
+Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integrations:
 - `POST /json/submitJob` - Submit build jobs
 - `POST /json/getStatus` - Get job status
 - `POST /json/getLogs` - Get job logs
@@ -64,6 +79,8 @@ Direct HTTP/JSON endpoints for testing and integration:
 - `POST /json/cleanup` - Cleanup resources
 - `POST /json/getHistory` - Get job history
 - `GET /json/streamLogs?job_id=<id>` - WebSocket log streaming
+
+**Important:** The `/json/*` endpoints are **NOT** part of the MCP protocol - they are custom HTTP endpoints for direct integration and testing.
 
 ### 3. Health & Monitoring
 
@@ -75,6 +92,12 @@ Direct HTTP/JSON endpoints for testing and integration:
 
 **MCP Inspector (Recommended):**
 ```
+URL: http://localhost:8080/mcp
+Transport: Simple JSON-RPC
+```
+
+**Advanced MCP Clients (Streaming):**
+```
 URL: http://localhost:8080/stream
 Transport: Streamable HTTP
 ```
@@ -85,7 +108,7 @@ URL: http://localhost:8080/sse
 Transport: Server-Sent Events
 ```
 
-**Direct HTTP/curl:**
+**Direct HTTP/curl (Non-MCP):**
 ```bash
 curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
@@ -713,8 +736,10 @@ You can test the MCP endpoints using the [MCP Inspector](https://github.com/mode
 2. **Open MCP Inspector** in your browser
 
 3. **Connect to the service:**
-   - **URL:** `http://localhost:8080/stream`
-   - **Transport:** Streamable HTTP
+   - **URL:** `http://localhost:8080/mcp`
+   - **Transport:** Simple JSON-RPC (recommended for Inspector)
+
+   **Alternative:** For streaming support, use `http://localhost:8080/stream`
 
 4. **Available MCP Tools:**
    - `submitJob` - Submit a new build job

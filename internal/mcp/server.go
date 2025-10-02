@@ -107,6 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/json/job/", s.handleJobResource)
 
 	// Register MCP Protocol endpoints
+	mux.HandleFunc("/mcp", s.handleMCPRequest)           // Simple JSON-RPC over HTTP (standard MCP)
 	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-03-26)
 	mux.HandleFunc("/sse", s.handleMCPSSE)              // Legacy SSE transport (2024-11-05)
 	
