@@ -712,7 +712,7 @@ func (nc *Client) getJobStatus(nomadJobID string) (string, error) {
 				}
 			}
 		}
-		
+
 		// If we have allocations, check their status
 		hasRunning := false
 		allComplete := true
@@ -725,11 +725,44 @@ func (nc *Client) getJobStatus(nomadJobID string) (string, error) {
 				allComplete = false
 			case "complete":
 				// Keep checking others
+			case "lost":
+				// Lost allocations should be treated as failed
+				allComplete = false
 			default:
+				// For any other status (including "dead"), check exit codes
+				// Docker containers exit normally with code 0, resulting in "dead" status
+				if alloc.TaskStates != nil {
+					allDead := true
+					anyFailed := false
+					for _, taskState := range alloc.TaskStates {
+						if taskState.State != "dead" {
+							allDead = false
+						}
+						// Check if task failed (non-zero exit code or Failed flag)
+						if taskState.Failed {
+							anyFailed = true
+						}
+						// Also check exit code from events
+						if taskState.Events != nil {
+							for _, event := range taskState.Events {
+								if event.Type == "Terminated" && event.ExitCode != 0 {
+									anyFailed = true
+								}
+							}
+						}
+					}
+					// If all tasks are dead and none failed, treat as complete
+					if allDead && !anyFailed {
+						// This allocation completed successfully (exit code 0)
+						continue
+					} else if anyFailed {
+						return "failed", nil
+					}
+				}
 				allComplete = false
 			}
 		}
-		
+
 		if hasRunning {
 			return "running", nil
 		}

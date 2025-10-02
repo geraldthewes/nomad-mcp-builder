@@ -34,8 +34,15 @@ type TestResult struct {
 	Duration     map[string]string `json:"duration"`
 }
 
+// globalTestMutex ensures tests don't run concurrently and conflict on registry
+var globalTestMutex sync.Mutex
+
 // TestBuildWorkflow tests the complete build workflow with service discovery
 func TestBuildWorkflow(t *testing.T) {
+	// Serialize tests to avoid registry conflicts
+	globalTestMutex.Lock()
+	defer globalTestMutex.Unlock()
+
 	// Create results directory
 	resultsDir := "test_results"
 	err := os.MkdirAll(resultsDir, 0755)
@@ -253,6 +260,10 @@ func TestBuildWorkflow(t *testing.T) {
 // TestBuildWorkflowNoTests tests the optimization where no tests are configured
 // and build pushes directly to final image tags
 func TestBuildWorkflowNoTests(t *testing.T) {
+	// Serialize tests to avoid registry conflicts
+	globalTestMutex.Lock()
+	defer globalTestMutex.Unlock()
+
 	// Create results directory
 	resultsDir := "test_results"
 	err := os.MkdirAll(resultsDir, 0755)
