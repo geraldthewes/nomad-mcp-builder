@@ -762,7 +762,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, mcp-protocol-version")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.WriteHeader(http.StatusOK)
 		return
@@ -878,7 +878,7 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, mcp-protocol-version")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.WriteHeader(http.StatusOK)
 		return
@@ -1117,7 +1117,7 @@ func (s *Server) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
 		// Handle CORS preflight
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, mcp-protocol-version")
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
