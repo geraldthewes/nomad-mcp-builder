@@ -48,7 +48,7 @@ func (c *Client) SubmitJob(jobConfig *types.JobConfig) (*types.SubmitJobResponse
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/submitJob", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/submitJob", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (c *Client) GetStatus(jobID string) (*types.GetStatusResponse, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/getStatus", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/getStatus", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (c *Client) GetLogs(jobID string, phase string) (*types.GetLogsResponse, er
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/getLogs", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/getLogs", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (c *Client) KillJob(jobID string) (*types.KillJobResponse, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/killJob", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/killJob", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (c *Client) Cleanup(jobID string) (*types.CleanupResponse, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/cleanup", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/cleanup", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (c *Client) GetHistory(limit int, offset int) (*types.GetHistoryResponse, e
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.doRequest("POST", "/mcp/getHistory", bytes.NewBuffer(body))
+	resp, err := c.doRequest("POST", "/json/getHistory", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}

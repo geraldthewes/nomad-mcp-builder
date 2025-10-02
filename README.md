@@ -34,37 +34,63 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
                    └─────────────┘
 ```
 
-## MCP Transport
+## API Endpoints
 
-This server now supports **both** standard MCP transports and custom HTTP/JSON endpoints:
+The service provides **three** distinct API interfaces:
 
-### Standard MCP Protocol Support ✅
+### 1. MCP Protocol Endpoints (Agent/Tool Integration)
 
-- **JSON-RPC over HTTP** at `/mcp` endpoint
-- **Streamable HTTP transport** at `/mcp/stream` endpoint  
-- **Full MCP 2024-11-05 compliance** with tools/list, tools/call, initialize
-- **Compatible with MCP Inspector** and standard MCP clients
-- **Future-proof transport** using modern bidirectional HTTP streaming
+**Streamable HTTP Transport** (2025-03-26 spec) - Recommended
+- **Endpoint:** `/stream`
+- **Transport:** Bidirectional HTTP streaming
+- **Use with:** MCP Inspector v0.17.0+, modern MCP clients
+- **Connection:** `http://localhost:8080/stream`
 
-### Custom HTTP/JSON API (Legacy)
+**Legacy SSE Transport** (2024-11-05 spec) - Backward compatibility
+- **Endpoint:** `/sse`
+- **Transport:** Server-Sent Events (GET) + JSON-RPC (POST)
+- **Use with:** Older MCP clients, mcp-cli
+- **Connection:** `http://localhost:8080/sse`
 
-- **HTTP POST requests** with JSON payloads at `/mcp/*` paths
-- **Standard HTTP responses** with JSON results  
-- **WebSocket connections** for real-time log streaming at `/mcp/streamLogs`
-- **RESTful endpoints** for direct curl/Postman testing
+### 2. JSON-RPC API (Custom, Non-MCP)
 
-### Connection Methods
+Direct HTTP/JSON endpoints for testing and integration:
+- `POST /json/submitJob` - Submit build jobs
+- `POST /json/getStatus` - Get job status
+- `POST /json/getLogs` - Get job logs
+- `GET /json/job/{id}/status` - RESTful status endpoint
+- `GET /json/job/{id}/logs` - RESTful logs endpoint
+- `POST /json/killJob` - Terminate jobs
+- `POST /json/cleanup` - Cleanup resources
+- `POST /json/getHistory` - Get job history
+- `GET /json/streamLogs?job_id=<id>` - WebSocket log streaming
 
-**For MCP Inspector (Recommended):**
-- URL: `http://localhost:8080/mcp/stream`
-- Transport: Streamable HTTP (modern, bidirectional)
+### 3. Health & Monitoring
 
-**For Standard MCP Clients:**
-- URL: `http://localhost:8080/mcp`  
-- Transport: JSON-RPC over HTTP (simple request/response)
+- `GET /health` - Service health check
+- `GET /ready` - Readiness probe
+- `GET /metrics` - Prometheus metrics (port 9090)
 
-**For Direct HTTP Testing:**
-- Use existing `/mcp/submitJob`, `/mcp/getStatus` etc. endpoints
+### Connection Examples
+
+**MCP Inspector (Recommended):**
+```
+URL: http://localhost:8080/stream
+Transport: Streamable HTTP
+```
+
+**Legacy MCP Clients:**
+```
+URL: http://localhost:8080/sse
+Transport: Server-Sent Events
+```
+
+**Direct HTTP/curl:**
+```bash
+curl -X POST http://localhost:8080/json/submitJob \
+  -H "Content-Type: application/json" \
+  -d '{"job_config": {...}}'
+```
 
 ## Quick Start
 
@@ -238,28 +264,6 @@ plugin "docker" {
 }
 ```
 
-## API Endpoints
-
-### MCP Endpoints
-
-- `POST /mcp/submitJob` - Submit a new build job
-- `POST /mcp/getStatus` - Get job status (legacy)
-- `POST /mcp/getLogs` - Get job logs (legacy)
-- `GET /mcp/job/{jobID}/status` - Get job status (RESTful)
-- `GET /mcp/job/{jobID}/logs` - Get job logs (RESTful)
-- `GET /mcp/streamLogs?job_id=<id>` - WebSocket log streaming
-- `POST /mcp/killJob` - Terminate a job
-- `POST /mcp/cleanup` - Cleanup resources
-- `POST /mcp/getHistory` - Get job history
-
-### Health Endpoints
-
-- `GET /health` - Service health check
-- `GET /ready` - Readiness probe
-
-### Metrics
-
-- `GET /metrics` - Prometheus metrics (default port 9090)
 
 ## Command Line Tool
 
@@ -654,13 +658,13 @@ This allows fine-grained control where resource-intensive build phases can have 
 **Note**: The `image_name` field is now **required** and specifies the name of the Docker image (e.g., "myapp", "web-server"). The final image will be tagged as `registry_url/image_name:tag`.
 
 ```bash
-curl -X POST http://localhost:8080/mcp/submitJob \
+curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
   -d '{
     "job_config": {
       "owner": "developer",
       "repo_url": "https://github.com/user/app.git",
-      "git_ref": "main", 
+      "git_ref": "main",
       "git_credentials_path": "secret/nomad/jobs/git-credentials",
       "dockerfile_path": "Dockerfile",
       "image_name": "myapp",
@@ -679,10 +683,10 @@ curl -X POST http://localhost:8080/mcp/submitJob \
 
 ```bash
 # RESTful endpoint (recommended)
-curl http://localhost:8080/mcp/job/550e8400-e29b-41d4-a716-446655440000/status
+curl http://localhost:8080/json/job/550e8400-e29b-41d4-a716-446655440000/status
 
 # Legacy POST endpoint
-curl -X POST http://localhost:8080/mcp/getStatus \
+curl -X POST http://localhost:8080/json/getStatus \
   -H "Content-Type: application/json" \
   -d '{"job_id": "550e8400-e29b-41d4-a716-446655440000"}'
 ```
@@ -690,7 +694,7 @@ curl -X POST http://localhost:8080/mcp/getStatus \
 ### Stream Logs via WebSocket
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8080/mcp/streamLogs?job_id=550e8400-e29b-41d4-a716-446655440000');
+const ws = new WebSocket('ws://localhost:8080/json/streamLogs?job_id=550e8400-e29b-41d4-a716-446655440000');
 ws.onmessage = function(event) {
   const log = JSON.parse(event.data);
   console.log(`[${log.phase}] ${log.message}`);
@@ -709,7 +713,7 @@ You can test the MCP endpoints using the [MCP Inspector](https://github.com/mode
 2. **Open MCP Inspector** in your browser
 
 3. **Connect to the service:**
-   - **URL:** `http://localhost:8080/mcp/stream`
+   - **URL:** `http://localhost:8080/stream`
    - **Transport:** Streamable HTTP
 
 4. **Available MCP Tools:**
@@ -995,7 +999,7 @@ consul catalog service nomad-build-service
 SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
 
 # Submit test job (replace with discovered URL or use SERVICE_URL)
-curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/submitJob \
+curl -X POST http://${SERVICE_URL:-localhost:8080}/json/submitJob \
   -H "Content-Type: application/json" \
   -d '{
     "job_config": {
@@ -1011,10 +1015,10 @@ curl -X POST http://${SERVICE_URL:-localhost:8080}/mcp/submitJob \
   }'
 
 # Check status (use returned job_id) - RESTful endpoint
-curl http://${SERVICE_URL:-localhost:8080}/mcp/job/<job-id>/status
+curl http://${SERVICE_URL:-localhost:8080}/json/job/<job-id>/status
 
 # Get logs when complete - RESTful endpoint
-curl http://${SERVICE_URL:-localhost:8080}/mcp/job/<job-id>/logs
+curl http://${SERVICE_URL:-localhost:8080}/json/job/<job-id>/logs
 ```
 
 ### Test Configuration

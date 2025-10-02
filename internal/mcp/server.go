@@ -96,21 +96,19 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	
-	// Register MCP endpoints (HTTP/JSON API)
-	mux.HandleFunc("/mcp/submitJob", s.handleSubmitJob)
-	mux.HandleFunc("/mcp/getStatus", s.handleGetStatus)
-	mux.HandleFunc("/mcp/getLogs", s.handleGetLogs)
-	mux.HandleFunc("/mcp/streamLogs", s.handleStreamLogs)
-	mux.HandleFunc("/mcp/killJob", s.handleKillJob)
-	mux.HandleFunc("/mcp/cleanup", s.handleCleanup)
-	mux.HandleFunc("/mcp/getHistory", s.handleGetHistory)
-	
-	// Register RESTful endpoints
-	mux.HandleFunc("/mcp/job/", s.handleJobResource)
-	
-	// Register Standard MCP Protocol endpoints
-	mux.HandleFunc("/mcp", s.handleMCPRequest)     // JSON-RPC over HTTP
-	mux.HandleFunc("/mcp/stream", s.handleMCPStream) // Streamable HTTP transport
+	// Register JSON-RPC API endpoints (custom, non-MCP protocol)
+	mux.HandleFunc("/json/submitJob", s.handleSubmitJob)
+	mux.HandleFunc("/json/getStatus", s.handleGetStatus)
+	mux.HandleFunc("/json/getLogs", s.handleGetLogs)
+	mux.HandleFunc("/json/streamLogs", s.handleStreamLogs)
+	mux.HandleFunc("/json/killJob", s.handleKillJob)
+	mux.HandleFunc("/json/cleanup", s.handleCleanup)
+	mux.HandleFunc("/json/getHistory", s.handleGetHistory)
+	mux.HandleFunc("/json/job/", s.handleJobResource)
+
+	// Register MCP Protocol endpoints
+	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-03-26)
+	mux.HandleFunc("/sse", s.handleMCPSSE)              // Legacy SSE transport (2024-11-05)
 	
 	// Health check endpoints
 	mux.HandleFunc("/health", s.handleHealth)
@@ -828,8 +826,9 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	s.writeMCPResponse(w, response)
 }
 
-// handleMCPStream provides streamable HTTP transport for MCP Inspector and modern clients
-func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
+// handleMCPStreamableHTTP provides streamable HTTP transport (MCP 2025-03-26 spec)
+// Supports both POST (client→server) and GET (server→client via SSE)
+func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestCount := 0
 	
@@ -1049,6 +1048,136 @@ func (s *Server) handleMCPStream(w http.ResponseWriter, r *http.Request) {
 		
 		flusher.Flush()
 	}
+}
+
+// handleMCPSSE provides legacy SSE transport (MCP 2024-11-05 spec) for backward compatibility
+// GET: Establishes SSE connection and sends endpoint event
+// POST: Receives client messages (sent to dynamically generated endpoint)
+func (s *Server) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"user_agent":  r.UserAgent(),
+	}).Info("MCP SSE request received")
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleMCPSSEStream(w, r, startTime)
+	case http.MethodPost:
+		s.handleMCPSSEPost(w, r, startTime)
+	case http.MethodOptions:
+		// Handle CORS preflight
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleMCPSSEStream handles GET requests for SSE stream establishment
+func (s *Server) handleMCPSSEStream(w http.ResponseWriter, r *http.Request, startTime time.Time) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial endpoint event - tells client where to POST messages
+	// In SSE transport, server sends an "endpoint" event with the POST URL
+	postEndpoint := fmt.Sprintf("http://%s/sse", r.Host)
+	endpointEvent := map[string]interface{}{
+		"endpoint": postEndpoint,
+	}
+	endpointJSON, _ := json.Marshal(endpointEvent)
+
+	fmt.Fprintf(w, "event: endpoint\n")
+	fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON))
+	flusher.Flush()
+
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr":   r.RemoteAddr,
+		"post_endpoint": postEndpoint,
+	}).Info("MCP SSE stream established, endpoint event sent")
+
+	// Keep connection alive and send ping events periodically
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			duration := time.Since(startTime)
+			s.logger.WithFields(map[string]interface{}{
+				"remote_addr": r.RemoteAddr,
+				"duration_ms": duration.Milliseconds(),
+			}).Info("MCP SSE stream closed")
+			return
+		case <-ticker.C:
+			// Send ping to keep connection alive
+			fmt.Fprintf(w, "event: ping\n")
+			fmt.Fprintf(w, "data: {}\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// handleMCPSSEPost handles POST requests for client messages in SSE transport
+func (s *Server) handleMCPSSEPost(w http.ResponseWriter, r *http.Request, startTime time.Time) {
+	var mcpReq MCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&mcpReq); err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"remote_addr": r.RemoteAddr,
+			"duration_ms": duration.Milliseconds(),
+			"error":       "Parse error: " + err.Error(),
+		}).Warn("MCP SSE POST parse error")
+		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
+		s.writeMCPResponse(w, response)
+		return
+	}
+
+	s.logger.WithFields(map[string]interface{}{
+		"mcp_method":  mcpReq.Method,
+		"mcp_id":      mcpReq.ID,
+		"remote_addr": r.RemoteAddr,
+	}).Info("MCP SSE POST method call")
+
+	var response MCPResponse
+	switch mcpReq.Method {
+	case "tools/list":
+		response = s.handleMCPToolsList(mcpReq)
+	case "tools/call":
+		response = s.handleMCPToolsCall(mcpReq)
+	case "initialize":
+		response = s.handleMCPInitialize(mcpReq)
+	case "ping":
+		response = s.handleMCPPing(mcpReq)
+	default:
+		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
+	}
+
+	duration := time.Since(startTime)
+	s.logger.WithFields(map[string]interface{}{
+		"mcp_method":  mcpReq.Method,
+		"mcp_id":      mcpReq.ID,
+		"remote_addr": r.RemoteAddr,
+		"duration_ms": duration.Milliseconds(),
+		"mcp_success": response.Error == nil,
+	}).Info("MCP SSE POST completed")
+
+	s.writeMCPResponse(w, response)
 }
 
 // handleMCPInitialize handles MCP initialization
@@ -1519,19 +1648,19 @@ func parseResourceLimitsFromMCP(limitsInterface interface{}) *types.ResourceLimi
 }
 
 // handleJobResource handles RESTful job resource endpoints
-// Routes: GET /mcp/job/{jobID}/status and GET /mcp/job/{jobID}/logs
+// Routes: GET /json/job/{jobID}/status and GET /json/job/{jobID}/logs
 func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
-	// Parse URL path: /mcp/job/{jobID}/{resource}
-	path := strings.TrimPrefix(r.URL.Path, "/mcp/job/")
+
+	// Parse URL path: /json/job/{jobID}/{resource}
+	path := strings.TrimPrefix(r.URL.Path, "/json/job/")
 	parts := strings.Split(path, "/")
 	
 	if len(parts) != 2 {
-		http.Error(w, "Invalid path format. Expected: /mcp/job/{jobID}/{status|logs}", http.StatusBadRequest)
+		http.Error(w, "Invalid path format. Expected: /json/job/{jobID}/{status|logs}", http.StatusBadRequest)
 		return
 	}
 	

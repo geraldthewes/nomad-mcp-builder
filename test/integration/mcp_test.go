@@ -109,7 +109,7 @@ func TestMCPToolsListAndDocumentation(t *testing.T) {
 		}
 
 		// Send the request to the MCP stream endpoint
-		resp := makeMCPRequest(t, serviceURL+"/mcp/stream", req)
+		resp := makeMCPRequest(t, serviceURL+"/stream", req)
 
 		// Verify response structure
 		if resp["error"] != nil {
@@ -192,7 +192,7 @@ func TestMCPToolsListAndDocumentation(t *testing.T) {
 			"params":  map[string]interface{}{},
 		}
 
-		resp := makeMCPRequest(t, serviceURL+"/mcp/stream", req)
+		resp := makeMCPRequest(t, serviceURL+"/stream", req)
 
 		// Resources might not be implemented yet, so just check if endpoint responds
 		if resp["error"] != nil {
@@ -255,7 +255,7 @@ func testSubmitJob(cfg *config.Config) func(*testing.T) {
 		}
 		
 		// Submit job
-		resp, err := makeHTTPRequest(cfg, "POST", "/mcp/submitJob", submitReq)
+		resp, err := makeHTTPRequest(cfg, "POST", "/json/submitJob", submitReq)
 		if err != nil {
 			t.Fatalf("Failed to submit job: %v", err)
 		}
@@ -286,7 +286,7 @@ func testGetStatus(cfg *config.Config) func(*testing.T) {
 			JobID: "test-job-id", // Would be from previous test
 		}
 		
-		resp, err := makeHTTPRequest(cfg, "POST", "/mcp/getStatus", statusReq)
+		resp, err := makeHTTPRequest(cfg, "POST", "/json/getStatus", statusReq)
 		if err != nil {
 			// Job might not exist in this isolated test
 			t.Logf("Status check failed (expected): %v", err)
@@ -311,7 +311,7 @@ func testGetLogs(cfg *config.Config) func(*testing.T) {
 			JobID: "test-job-id", // Would be from previous test
 		}
 		
-		resp, err := makeHTTPRequest(cfg, "POST", "/mcp/getLogs", logsReq)
+		resp, err := makeHTTPRequest(cfg, "POST", "/json/getLogs", logsReq)
 		if err != nil {
 			// Job might not exist in this isolated test
 			t.Logf("Logs request failed (expected): %v", err)

@@ -658,7 +658,7 @@ func submitJob(serviceURL string, jobConfig types.JobConfig) (string, error) {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := http.Post(serviceURL+"/mcp/submitJob", "application/json", bytes.NewBuffer(reqBody))
+	resp, err := http.Post(serviceURL+"/json/submitJob", "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to submit job: %w", err)
 	}
@@ -690,7 +690,7 @@ func monitorJobUntilComplete(serviceURL, jobID string, timeout time.Duration) (t
 		case <-ctx.Done():
 			return types.StatusFailed, fmt.Errorf("job monitoring timed out after %v", timeout)
 		case <-ticker.C:
-			url := fmt.Sprintf("%s/mcp/job/%s/status", serviceURL, jobID)
+			url := fmt.Sprintf("%s/json/job/%s/status", serviceURL, jobID)
 			resp, err := http.Get(url)
 			if err != nil {
 				continue // Retry on error
@@ -721,7 +721,7 @@ func monitorJobUntilComplete(serviceURL, jobID string, timeout time.Duration) (t
 
 // getJobLogs retrieves logs for a job using RESTful endpoint
 func getJobLogs(serviceURL, jobID string) (types.JobLogs, error) {
-	url := fmt.Sprintf("%s/mcp/job/%s/logs", serviceURL, jobID)
+	url := fmt.Sprintf("%s/json/job/%s/logs", serviceURL, jobID)
 	resp, err := http.Get(url)
 	if err != nil {
 		return types.JobLogs{}, fmt.Errorf("failed to get logs: %w", err)
@@ -743,7 +743,7 @@ func getJobLogs(serviceURL, jobID string) (types.JobLogs, error) {
 
 // getJobStatus retrieves status and metrics for a job using RESTful endpoint
 func getJobStatus(serviceURL, jobID string) (types.GetStatusResponse, error) {
-	url := fmt.Sprintf("%s/mcp/job/%s/status", serviceURL, jobID)
+	url := fmt.Sprintf("%s/json/job/%s/status", serviceURL, jobID)
 	resp, err := http.Get(url)
 	if err != nil {
 		return types.GetStatusResponse{}, fmt.Errorf("failed to get status: %w", err)
