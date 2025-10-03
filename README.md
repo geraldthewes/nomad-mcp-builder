@@ -84,9 +84,9 @@ Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integratio
 
 ### 3. Health & Monitoring
 
-- `GET /health` - Service health check
-- `GET /ready` - Readiness probe
-- `GET /metrics` - Prometheus metrics (port 9090)
+- `GET /health` - Service health check (on SERVER_PORT, default 8080)
+- `GET /ready` - Readiness probe (on SERVER_PORT, default 8080)
+- `GET /metrics` - Prometheus metrics (on METRICS_PORT, default 9090)
 
 ### Connection Examples
 
@@ -113,6 +113,9 @@ Transport: Server-Sent Events
 curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
   -d '{"job_config": {...}}'
+
+# Health check (on SERVER_PORT)
+curl http://localhost:8080/health
 ```
 
 ## Quick Start
@@ -811,7 +814,7 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
 COPY nomad-build-service .
-EXPOSE 8080 9090 8081
+EXPOSE 8080 9090
 CMD ["./nomad-build-service"]
 EOF
 
@@ -873,9 +876,9 @@ docker push your-registry:5000/nomad-build-service:latest
 ### Service Endpoints
 
 Once deployed, the service will be available at:
-- **API**: `http://service-ip:8080` (MCP endpoints)  
-- **Health**: `http://service-ip:8081/health`
-- **Metrics**: `http://service-ip:9090/metrics` (Prometheus)
+- **API**: `http://service-ip:8080` (MCP endpoints, configurable via SERVER_PORT)
+- **Health**: `http://service-ip:8080/health` (on SERVER_PORT)
+- **Metrics**: `http://service-ip:9090/metrics` (on METRICS_PORT, configurable via METRICS_PORT)
 
 ### Scaling
 

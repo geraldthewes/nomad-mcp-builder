@@ -314,3 +314,14 @@ Requires:
 - Nomad-Vault integration for secrets
 - Persistent volume access for build caching
 - For GPU builds: GPU drivers and device plugins on Nomad clients
+
+## Documentation Maintenance
+
+**CRITICAL**: Whenever you make changes to the codebase (code, configuration, APIs, endpoints, etc.), you MUST update README.md to reflect those changes. The README.md is the primary user-facing documentation and must always be accurate and current. This includes:
+- API endpoint changes (ports, paths, parameters)
+- Configuration variable changes
+- Service behavior changes
+- New features or removed features
+- Deployment or testing procedure changes
+
+**Before committing any changes, always verify that README.md accurately reflects the current state of the codebase.**
