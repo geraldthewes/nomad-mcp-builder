@@ -96,6 +96,7 @@ type MonitoringConfig struct {
 
 type LoggingConfig struct {
 	Level          string `json:"level"`
+	LogLevel       int    `json:"log_level"`     // 0=normal (default), 1=verbose (full request/response)
 	LogJobSpecs    bool   `json:"log_job_specs"`
 	LogHCLFormat   bool   `json:"log_hcl_format"`
 }
@@ -154,6 +155,7 @@ func Load() (*Config, error) {
 		},
 		Logging: LoggingConfig{
 			Level:        getEnv("LOG_LEVEL", "info"),
+			LogLevel:     getEnvInt("MCP_LOG_LEVEL", 0),
 			LogJobSpecs:  getEnvBool("LOG_JOB_SPECS", false),
 			LogHCLFormat: getEnvBool("LOG_HCL_FORMAT", false),
 		},

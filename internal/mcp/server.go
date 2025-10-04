@@ -785,8 +785,24 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read body for potential verbose logging
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":       r.Method,
+			"uri":          r.RequestURI,
+			"remote_addr":  r.RemoteAddr,
+			"status":       http.StatusBadRequest,
+			"duration_ms":  duration.Milliseconds(),
+			"error":        "Failed to read body: " + err.Error(),
+		}).Info("MCP request completed")
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
 	var mcpReq MCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&mcpReq); err != nil {
+	if err := json.Unmarshal(bodyBytes, &mcpReq); err != nil {
 		duration := time.Since(startTime)
 		s.logger.WithFields(map[string]interface{}{
 			"method":       r.Method,
@@ -807,6 +823,25 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		"mcp_id":       mcpReq.ID,
 		"remote_addr":  r.RemoteAddr,
 	}).Info("MCP method call")
+
+	// Verbose logging: log full request and extract tool name for tools/call
+	if s.config.Logging.LogLevel >= 1 {
+		logFields := map[string]interface{}{
+			"raw_request": string(bodyBytes),
+			"mcp_method":  mcpReq.Method,
+		}
+
+		// Extract tool name if this is a tools/call
+		if mcpReq.Method == "tools/call" {
+			if params, ok := mcpReq.Params.(map[string]interface{}); ok {
+				if toolName, ok := params["name"].(string); ok {
+					logFields["tool_name"] = toolName
+				}
+			}
+		}
+
+		s.logger.WithFields(logFields).Info("MCP request detail (LOG_LEVEL=1)")
+	}
 
 	// Handle notifications (JSON-RPC requests without id field)
 	// Notifications don't expect a response, just acknowledge with 200 OK
@@ -854,6 +889,17 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		"mcp_id":       mcpReq.ID,
 		"mcp_success":  response.Error == nil,
 	}).Info("MCP request completed")
+
+	// Verbose logging: log full response
+	if s.config.Logging.LogLevel >= 1 {
+		if responseJSON, err := json.Marshal(response); err == nil {
+			s.logger.WithFields(map[string]interface{}{
+				"raw_response": string(responseJSON),
+				"mcp_method":   mcpReq.Method,
+				"mcp_id":       mcpReq.ID,
+			}).Info("MCP response detail (LOG_LEVEL=1)")
+		}
+	}
 
 	s.writeMCPResponse(w, response)
 }
@@ -1052,6 +1098,25 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 			"request_num":  requestCount,
 		}).Info("MCP stream method call")
 
+		// Verbose logging: log full request and extract tool name for tools/call
+		if s.config.Logging.LogLevel >= 1 {
+			logFields := map[string]interface{}{
+				"raw_request": string(rawData),
+				"mcp_method":  mcpReq.Method,
+			}
+
+			// Extract tool name if this is a tools/call
+			if mcpReq.Method == "tools/call" {
+				if params, ok := mcpReq.Params.(map[string]interface{}); ok {
+					if toolName, ok := params["name"].(string); ok {
+						logFields["tool_name"] = toolName
+					}
+				}
+			}
+
+			s.logger.WithFields(logFields).Info("MCP stream request detail (LOG_LEVEL=1)")
+		}
+
 		var response MCPResponse
 		switch mcpReq.Method {
 		case "tools/list":
@@ -1090,7 +1155,18 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 			"request_num":  requestCount,
 			"mcp_success":  response.Error == nil,
 		}).Info("MCP stream method completed")
-		
+
+		// Verbose logging: log full response
+		if s.config.Logging.LogLevel >= 1 {
+			if responseJSON, err := json.Marshal(response); err == nil {
+				s.logger.WithFields(map[string]interface{}{
+					"raw_response": string(responseJSON),
+					"mcp_method":   mcpReq.Method,
+					"mcp_id":       mcpReq.ID,
+				}).Info("MCP stream response detail (LOG_LEVEL=1)")
+			}
+		}
+
 		flusher.Flush()
 	}
 }

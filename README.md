@@ -197,6 +197,8 @@ curl http://localhost:8080/health
 | `REGISTRY_TEMP_PREFIX` | `temp` | Prefix for temporary images in registry |
 | `REGISTRY_USERNAME` | _(empty)_ | Registry username (optional for public registries) |
 | `REGISTRY_PASSWORD` | _(empty)_ | Registry password (optional for public registries) |
+| `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `MCP_LOG_LEVEL` | `0` | MCP protocol verbose logging: `0`=compact (default), `1`=verbose with full request/response JSON |
 
 ### Consul Configuration
 
@@ -941,6 +943,25 @@ Enable debug logging:
 export LOG_LEVEL=debug
 ./nomad-build-service
 ```
+
+#### MCP Protocol Verbose Logging
+
+For debugging MCP protocol communication issues, enable verbose logging to capture full request/response JSON:
+
+```bash
+export MCP_LOG_LEVEL=1
+./nomad-build-service
+```
+
+**Log Levels:**
+- `MCP_LOG_LEVEL=0` (default): Compact structured logs with method names and IDs
+- `MCP_LOG_LEVEL=1`: Verbose logging including:
+  - Full raw request JSON
+  - Tool name extraction for `tools/call` requests
+  - Full raw response JSON
+  - Useful for debugging client integration issues
+
+**Note:** This setting is independent of `LOG_LEVEL` and only affects MCP protocol logging. Use it when troubleshooting MCP client connections or tool invocations.
 
 ### Log Analysis
 
