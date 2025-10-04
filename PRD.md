@@ -35,11 +35,12 @@ This product is designed for agentic code development, offloading resource-inten
 
 ### 2.1 In Scope
 
-* MCP server for job submission, status queries, and log retrieval.  
-* Nomad job orchestration for: repo cloning, image building (via Buildah), testing (running commands within the new image), and publishing.  
-* Support for network access during the test phase (e.g., for connecting to databases or other services like S3).  
-* Robust error handling with full, phase-specific logs accessible via MCP.  
-* Secure credential handling using pre-populated Nomad Vault variables for Git and container registries.  
+* **MCP Protocol Compliance:** The MCP server implementation MUST conform to the latest Model Context Protocol specification as defined at https://modelcontextprotocol.io/specification/latest. All protocol changes, feature additions, and bug fixes must maintain compliance with the specification, including proper initialization sequences, protocol version negotiation, JSON-RPC 2.0 message formatting, notification handling, and transport layer requirements.
+* MCP server for job submission, status queries, and log retrieval.
+* Nomad job orchestration for: repo cloning, image building (via Buildah), testing (running commands within the new image), and publishing.
+* Support for network access during the test phase (e.g., for connecting to databases or other services like S3).
+* Robust error handling with full, phase-specific logs accessible via MCP.
+* Secure credential handling using pre-populated Nomad Vault variables for Git and container registries.
 * Leveraging Buildah's layer caching via a persistent host volume to accelerate builds, especially for images with extensive dependencies (e.g., CUDA, Python packages).
 
 ### 2.2 Out of Scope

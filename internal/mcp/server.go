@@ -869,6 +869,9 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		response = s.handleMCPToolsCall(mcpReq)
 	case "initialize":
 		response = s.handleMCPInitialize(mcpReq)
+	case "notifications/initialized":
+		// Client signals initialization complete - acknowledge with empty result
+		response = NewMCPResponse(mcpReq.ID, map[string]interface{}{})
 	default:
 		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
 	}
@@ -1125,6 +1128,9 @@ func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request)
 			response = s.handleMCPToolsCall(mcpReq)
 		case "initialize":
 			response = s.handleMCPInitialize(mcpReq)
+		case "notifications/initialized":
+			// Client signals initialization complete - acknowledge with empty result
+			response = NewMCPResponse(mcpReq.ID, map[string]interface{}{})
 		case "ping":
 			response = s.handleMCPPing(mcpReq)
 		default:
@@ -1283,6 +1289,9 @@ func (s *Server) handleMCPSSEPost(w http.ResponseWriter, r *http.Request, startT
 		response = s.handleMCPToolsCall(mcpReq)
 	case "initialize":
 		response = s.handleMCPInitialize(mcpReq)
+	case "notifications/initialized":
+		// Client signals initialization complete - acknowledge with empty result
+		response = NewMCPResponse(mcpReq.ID, map[string]interface{}{})
 	case "ping":
 		response = s.handleMCPPing(mcpReq)
 	default:
@@ -1303,8 +1312,20 @@ func (s *Server) handleMCPSSEPost(w http.ResponseWriter, r *http.Request, startT
 
 // handleMCPInitialize handles MCP initialization
 func (s *Server) handleMCPInitialize(req MCPRequest) MCPResponse {
+	// Parse client's requested protocol version
+	var clientVersion string
+	if params, ok := req.Params.(map[string]interface{}); ok {
+		if version, ok := params["protocolVersion"].(string); ok {
+			clientVersion = version
+			s.logger.WithFields(map[string]interface{}{
+				"client_version": clientVersion,
+			}).Info("Client requested MCP protocol version")
+		}
+	}
+
+	// Respond with our supported version (2025-06-18)
 	result := map[string]interface{}{
-		"protocolVersion": "2024-11-05",
+		"protocolVersion": "2025-06-18",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{},
 		},

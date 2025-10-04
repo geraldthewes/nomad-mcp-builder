@@ -26,10 +26,25 @@ The system consists of:
 ## Key Technical Requirements
 
 ### Technology Stack (from PRD)
-- **Go 1.22+** 
+- **Go 1.22+**
 - **Nomad 1.10+** with Vault integration
 - **Buildah** (latest stable via `quay.io/buildah/stable`)
 - **MCP Protocol** for agent communication
+
+### MCP Specification Compliance
+- **CRITICAL**: All MCP server implementations and changes MUST conform to the latest Model Context Protocol specification
+- **Specification URL**: https://modelcontextprotocol.io/specification/latest
+- **Current Protocol Version**: `2025-06-18` (as of latest update)
+- **Required Compliance Areas**:
+  - Initialization sequence (initialize request/response, notifications/initialized)
+  - Protocol version negotiation
+  - JSON-RPC 2.0 message format
+  - Notification vs request handling (ID field presence)
+  - Tool definitions and invocation format
+  - Error codes and error handling
+  - All supported transport methods (HTTP, SSE, Streamable HTTP)
+- When implementing new features or fixing bugs, always verify against the latest spec
+- Integration tests should validate spec compliance
 
 ### Key Libraries to Use
 - `github.com/hashicorp/nomad/api` - Nomad API client
