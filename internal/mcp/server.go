@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
-	
+
 	"nomad-mcp-builder/internal/config"
 	"nomad-mcp-builder/internal/nomad"
 	"nomad-mcp-builder/internal/storage"
@@ -30,18 +29,22 @@ type Server struct {
 	nomadClient *nomad.Client
 	storage    *storage.ConsulStorage
 	logger     *logrus.Logger
-	
+
 	// WebSocket connections for log streaming
 	wsConnections map[string][]*websocket.Conn
 	wsMutex       sync.RWMutex
-	
+
 	// Job-level mutexes to prevent concurrent updates to the same job
 	jobMutexes map[string]*sync.Mutex
 	jobMutexLock sync.RWMutex
-	
+
+	// MCP session management (session ID -> creation time)
+	mcpSessions map[string]time.Time
+	sessionMutex sync.RWMutex
+
 	// WebSocket upgrader
 	upgrader websocket.Upgrader
-	
+
 	// Webhook client for sending notifications
 	webhookClient *http.Client
 }
@@ -76,6 +79,7 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 		logger:        logrus.New(),
 		wsConnections: make(map[string][]*websocket.Conn),
 		jobMutexes:    make(map[string]*sync.Mutex),
+		mcpSessions:   make(map[string]time.Time),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // Allow all origins for now
@@ -907,273 +911,305 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	s.writeMCPResponse(w, response)
 }
 
+// Session management helpers
+
+// generateSessionID creates a new unique session ID
+func (s *Server) generateSessionID() string {
+	// Use timestamp + random component for uniqueness
+	return fmt.Sprintf("mcp-session-%d-%d", time.Now().UnixNano(), time.Now().Unix()%10000)
+}
+
+// getOrCreateSession returns existing session ID from header, or creates new one
+func (s *Server) getOrCreateSession(r *http.Request) string {
+	// Check if client sent session ID
+	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
+		s.sessionMutex.RLock()
+		_, exists := s.mcpSessions[sessionID]
+		s.sessionMutex.RUnlock()
+
+		if exists {
+			return sessionID
+		}
+	}
+
+	// Create new session
+	sessionID := s.generateSessionID()
+	s.sessionMutex.Lock()
+	s.mcpSessions[sessionID] = time.Now()
+	s.sessionMutex.Unlock()
+
+	s.logger.WithField("session_id", sessionID).Debug("Created new MCP session")
+	return sessionID
+}
+
 // handleMCPStreamableHTTP provides streamable HTTP transport (MCP 2025-03-26 spec)
-// Supports both POST (client→server) and GET (server→client via SSE)
+// Per spec: Each POST request contains exactly ONE JSON-RPC message, server responds and closes connection
 func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
-	requestCount := 0
 
-	// Log initial stream connection in web server format
-	s.logger.WithFields(map[string]interface{}{
+	// Log incoming request with headers (for debugging load balancer issues)
+	logFields := map[string]interface{}{
 		"method":         r.Method,
 		"uri":            r.RequestURI,
 		"remote_addr":    r.RemoteAddr,
 		"user_agent":     r.UserAgent(),
 		"content_length": r.ContentLength,
 		"content_type":   r.Header.Get("Content-Type"),
-	}).Info("MCP stream connection received")
+	}
+
+	// Log load balancer headers if present
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		logFields["x_forwarded_for"] = xff
+	}
+	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
+		logFields["x_real_ip"] = xrip
+	}
+
+	s.logger.WithFields(logFields).Info("MCP stream connection received")
 
 	// Handle CORS preflight
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, mcp-protocol-version")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.WriteHeader(http.StatusOK)
-		return
-	}
 
-	// Set CORS headers for actual request
-	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-
-	// Set headers for streamable HTTP transport
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-
-	// Handle preflight requests
-	if r.Method == http.MethodOptions {
 		duration := time.Since(startTime)
 		s.logger.WithFields(map[string]interface{}{
-			"method":       r.Method,
-			"uri":          r.RequestURI,
-			"remote_addr":  r.RemoteAddr,
-			"status":       http.StatusOK,
-			"duration_ms":  duration.Milliseconds(),
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"status":      http.StatusOK,
+			"duration_ms": duration.Milliseconds(),
 		}).Info("MCP stream preflight completed")
-		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// Handle GET requests for SSE streaming (server→client messages)
+	if r.Method == http.MethodGet {
+		s.handleMCPStreamableHTTPSSE(w, r, startTime)
+		return
+	}
+
+	// Only POST allowed for client→server requests
 	if r.Method != http.MethodPost {
 		duration := time.Since(startTime)
 		s.logger.WithFields(map[string]interface{}{
-			"method":       r.Method,
-			"uri":          r.RequestURI,
-			"remote_addr":  r.RemoteAddr,
-			"status":       http.StatusMethodNotAllowed,
-			"duration_ms":  duration.Milliseconds(),
-			"error":        "Method not allowed",
-		}).Info("MCP stream completed")
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"status":      http.StatusMethodNotAllowed,
+			"duration_ms": duration.Milliseconds(),
+			"error":       "Method not allowed",
+		}).Info("MCP stream request completed")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	// Read request body (exactly ONE JSON-RPC message per spec)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
 		duration := time.Since(startTime)
 		s.logger.WithFields(map[string]interface{}{
-			"method":       r.Method,
-			"uri":          r.RequestURI,
-			"remote_addr":  r.RemoteAddr,
-			"status":       http.StatusInternalServerError,
-			"duration_ms":  duration.Milliseconds(),
-			"error":        "Streaming unsupported",
-		}).Info("MCP stream completed")
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"status":      http.StatusBadRequest,
+			"duration_ms": duration.Milliseconds(),
+			"error":       "Failed to read body: " + err.Error(),
+		}).Info("MCP stream request completed")
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse JSON-RPC request
+	var mcpReq MCPRequest
+	if err := json.Unmarshal(bodyBytes, &mcpReq); err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"status":      http.StatusBadRequest,
+			"duration_ms": duration.Milliseconds(),
+			"error":       "Parse error: " + err.Error(),
+		}).Info("MCP stream request completed")
+
+		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Detect if this is a notification (requests with no id field)
+	isNotification := mcpReq.ID == nil
+
+	// Log the MCP method call
+	s.logger.WithFields(map[string]interface{}{
+		"mcp_method":     mcpReq.Method,
+		"mcp_id":         mcpReq.ID,
+		"remote_addr":    r.RemoteAddr,
+		"is_notification": isNotification,
+	}).Info("MCP stream method call")
+
+	// Verbose logging: log full request and extract tool name for tools/call
+	if s.config.Logging.LogLevel >= 1 {
+		requestLogFields := map[string]interface{}{
+			"raw_request": string(bodyBytes),
+			"mcp_method":  mcpReq.Method,
+		}
+
+		// Extract tool name if this is a tools/call
+		if mcpReq.Method == "tools/call" {
+			if params, ok := mcpReq.Params.(map[string]interface{}); ok {
+				if toolName, ok := params["name"].(string); ok {
+					requestLogFields["tool_name"] = toolName
+				}
+			}
+		}
+
+		s.logger.WithFields(requestLogFields).Info("MCP stream request detail (LOG_LEVEL=1)")
+	}
+
+	// Handle notifications per MCP spec: return 202 Accepted with no body
+	if isNotification {
+		duration := time.Since(startTime)
+
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
+		w.WriteHeader(http.StatusAccepted) // 202 Accepted, no response body
+
+		s.logger.WithFields(map[string]interface{}{
+			"mcp_method":  mcpReq.Method,
+			"remote_addr": r.RemoteAddr,
+			"status":      http.StatusAccepted,
+			"duration_ms": duration.Milliseconds(),
+		}).Info("MCP stream notification acknowledged")
+		return
+	}
+
+	// Get or create session ID
+	sessionID := s.getOrCreateSession(r)
+
+	// Process the request
+	var response MCPResponse
+	switch mcpReq.Method {
+	case "tools/list":
+		response = s.handleMCPToolsList(mcpReq)
+	case "tools/call":
+		response = s.handleMCPToolsCall(mcpReq)
+	case "initialize":
+		response = s.handleMCPInitialize(mcpReq)
+	case "ping":
+		response = s.handleMCPPing(mcpReq)
+	default:
+		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
+	}
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
+	w.Header().Set("Mcp-Session-Id", sessionID) // Send session ID to client
+
+	// Send JSON-RPC response
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"method":     mcpReq.Method,
+			"request_id": mcpReq.ID,
+			"remote_addr": r.RemoteAddr,
+		}).Error("Failed to encode MCP stream response")
+		return
+	}
+
+	// Log successful completion
+	duration := time.Since(startTime)
+	s.logger.WithFields(map[string]interface{}{
+		"mcp_method":  mcpReq.Method,
+		"mcp_id":      mcpReq.ID,
+		"remote_addr": r.RemoteAddr,
+		"duration_ms": duration.Milliseconds(),
+		"mcp_success": response.Error == nil,
+		"session_id":  sessionID,
+	}).Info("MCP stream method completed")
+
+	// Verbose logging: log full response
+	if s.config.Logging.LogLevel >= 1 {
+		if responseJSON, err := json.Marshal(response); err == nil {
+			s.logger.WithFields(map[string]interface{}{
+				"raw_response": string(responseJSON),
+				"mcp_method":   mcpReq.Method,
+				"mcp_id":       mcpReq.ID,
+			}).Info("MCP stream response detail (LOG_LEVEL=1)")
+		}
+	}
+
+	// Connection closes naturally after response is sent (per MCP spec)
+}
+
+// handleMCPStreamableHTTPSSE handles GET requests for server→client SSE streaming
+// Per MCP spec: Server can send messages to client via SSE when client GETs the endpoint
+// Since we don't send server-initiated messages, we maintain an idle SSE connection
+func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Request, startTime time.Time) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
+	w.Header().Set("X-Accel-Buffering", "no") // Disable buffering in nginx/proxies
+
+	// Get session ID from request
+	sessionID := s.getOrCreateSession(r)
+	w.Header().Set("Mcp-Session-Id", sessionID)
+
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"session_id":  sessionID,
+	}).Info("MCP SSE stream established")
+
+	// Check if flushing is supported
+	flusher, ok := w.(http.Flusher)
+	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
-	encoder := json.NewEncoder(w)
+	// Send initial comment to establish stream
+	fmt.Fprintf(w, ": MCP SSE stream connected\n\n")
+	flusher.Flush()
 
-	// Log stream session established
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr": r.RemoteAddr,
-		"user_agent":  r.UserAgent(),
-		"content_length": r.ContentLength,
-	}).Info("MCP stream session established")
+	// Keep connection alive with periodic pings
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-	// Create a buffered reader to handle streaming JSON with debug logging
-	reader := bufio.NewReader(r.Body)
-
-	defer func() {
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"method":        r.Method,
-			"uri":           r.RequestURI,
-			"remote_addr":   r.RemoteAddr,
-			"status":        http.StatusOK,
-			"duration_ms":   duration.Milliseconds(),
-			"requests_processed": requestCount,
-		}).Info("MCP stream session completed")
-	}()
+	// Context for handling disconnects
+	ctx := r.Context()
 
 	for {
-		requestStartTime := time.Now()
-		
-		// Buffer to capture raw request data for debugging
-		var rawData []byte
-		
-		// Read until we have what looks like a complete JSON object
-		braceCount := 0
-		inString := false
-		escaped := false
-		
-		for {
-			b, err := reader.ReadByte()
-			if err != nil {
-				if err.Error() == "EOF" {
-					if len(rawData) == 0 {
-						s.logger.WithFields(map[string]interface{}{
-							"remote_addr": r.RemoteAddr,
-						}).Info("MCP stream connection closed (EOF)")
-						return
-					}
-				} else {
-					s.logger.WithFields(map[string]interface{}{
-						"error":         err.Error(),
-						"remote_addr":   r.RemoteAddr,
-						"user_agent":    r.UserAgent(),
-						"content_type":  r.Header.Get("Content-Type"),
-						"content_length": r.ContentLength,
-						"connection":    r.Header.Get("Connection"),
-						"transfer_encoding": r.Header.Get("Transfer-Encoding"),
-						"raw_data_len":  len(rawData),
-						"raw_data":      string(rawData),
-					}).Warn("Error reading MCP stream request")
-				}
-				return
-			}
-			
-			rawData = append(rawData, b)
-			
-			if !inString {
-				switch b {
-				case '{':
-					braceCount++
-				case '}':
-					braceCount--
-					if braceCount == 0 {
-						goto parseJSON
-					}
-				case '"':
-					inString = true
-				}
-			} else {
-				if b == '"' && !escaped {
-					inString = false
-				}
-				escaped = (b == '\\' && !escaped)
-			}
-		}
-
-	parseJSON:
-		requestCount++
-		
-		// Now try to parse the captured JSON
-		var mcpReq MCPRequest
-		if err := json.Unmarshal(rawData, &mcpReq); err != nil {
-			requestDuration := time.Since(requestStartTime)
+		select {
+		case <-ctx.Done():
+			// Client disconnected
+			duration := time.Since(startTime)
 			s.logger.WithFields(map[string]interface{}{
-				"error":         err.Error(),
-				"remote_addr":   r.RemoteAddr,
-				"user_agent":    r.UserAgent(),
-				"content_type":  r.Header.Get("Content-Type"),
-				"content_length": r.ContentLength,
-				"connection":    r.Header.Get("Connection"),
-				"transfer_encoding": r.Header.Get("Transfer-Encoding"),
-				"raw_data_len":  len(rawData),
-				"raw_data":      string(rawData),
-				"duration_ms":   requestDuration.Milliseconds(),
-				"request_num":   requestCount,
-			}).Warn("MCP stream request decode failed")
-			continue // Try to read next JSON object
-		}
+				"remote_addr": r.RemoteAddr,
+				"session_id":  sessionID,
+				"duration_ms": duration.Milliseconds(),
+			}).Info("MCP SSE stream closed")
+			return
 
-		// Log individual MCP method call within stream
-		s.logger.WithFields(map[string]interface{}{
-			"mcp_method":   mcpReq.Method,
-			"mcp_id":       mcpReq.ID,
-			"remote_addr":  r.RemoteAddr,
-			"request_num":  requestCount,
-		}).Info("MCP stream method call")
+		case <-ticker.C:
+			// Send ping to keep connection alive
+			fmt.Fprintf(w, "event: ping\n")
+			fmt.Fprintf(w, "data: {}\n\n")
+			flusher.Flush()
 
-		// Verbose logging: log full request and extract tool name for tools/call
-		if s.config.Logging.LogLevel >= 1 {
-			logFields := map[string]interface{}{
-				"raw_request": string(rawData),
-				"mcp_method":  mcpReq.Method,
-			}
-
-			// Extract tool name if this is a tools/call
-			if mcpReq.Method == "tools/call" {
-				if params, ok := mcpReq.Params.(map[string]interface{}); ok {
-					if toolName, ok := params["name"].(string); ok {
-						logFields["tool_name"] = toolName
-					}
-				}
-			}
-
-			s.logger.WithFields(logFields).Info("MCP stream request detail (LOG_LEVEL=1)")
-		}
-
-		var response MCPResponse
-		switch mcpReq.Method {
-		case "tools/list":
-			response = s.handleMCPToolsList(mcpReq)
-		case "tools/call":
-			response = s.handleMCPToolsCall(mcpReq)
-		case "initialize":
-			response = s.handleMCPInitialize(mcpReq)
-		case "notifications/initialized":
-			// Client signals initialization complete - acknowledge with empty result
-			response = NewMCPResponse(mcpReq.ID, map[string]interface{}{})
-		case "ping":
-			response = s.handleMCPPing(mcpReq)
-		default:
-			response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
-		}
-
-		// Send response immediately over the stream
-		if err := encoder.Encode(response); err != nil {
-			requestDuration := time.Since(requestStartTime)
 			s.logger.WithFields(map[string]interface{}{
-				"error":         err.Error(),
-				"method":        mcpReq.Method,
-				"request_id":    mcpReq.ID,
-				"remote_addr":   r.RemoteAddr,
-				"duration_ms":   requestDuration.Milliseconds(),
-				"request_num":   requestCount,
-			}).Error("Failed to encode MCP stream response")
-			break
+				"remote_addr": r.RemoteAddr,
+				"session_id":  sessionID,
+			}).Debug("MCP SSE ping sent")
 		}
-		
-		// Log successful method completion
-		requestDuration := time.Since(requestStartTime)
-		s.logger.WithFields(map[string]interface{}{
-			"mcp_method":   mcpReq.Method,
-			"mcp_id":       mcpReq.ID,
-			"remote_addr":  r.RemoteAddr,
-			"duration_ms":  requestDuration.Milliseconds(),
-			"request_num":  requestCount,
-			"mcp_success":  response.Error == nil,
-		}).Info("MCP stream method completed")
-
-		// Verbose logging: log full response
-		if s.config.Logging.LogLevel >= 1 {
-			if responseJSON, err := json.Marshal(response); err == nil {
-				s.logger.WithFields(map[string]interface{}{
-					"raw_response": string(responseJSON),
-					"mcp_method":   mcpReq.Method,
-					"mcp_id":       mcpReq.ID,
-				}).Info("MCP stream response detail (LOG_LEVEL=1)")
-			}
-		}
-
-		flusher.Flush()
 	}
 }
 

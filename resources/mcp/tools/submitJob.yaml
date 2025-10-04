@@ -39,10 +39,12 @@ input_schema:
       description: "Base name for the Docker image"
 
     image_tags:
-      type: "array"
-      items:
-        type: "string"
-      description: "List of image tags to apply"
+      description: "List of image tags to apply. Can be an array of strings ['latest', 'v1.0'] or a JSON string '[\"latest\"]' for compatibility."
+      oneOf:
+        - type: "array"
+          items:
+            type: "string"
+        - type: "string"
 
     registry_url:
       type: "string"
