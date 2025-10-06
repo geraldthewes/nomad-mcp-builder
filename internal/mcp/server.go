@@ -108,7 +108,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// MCP Protocol endpoints
 	mux.HandleFunc("/mcp", s.handleMCPRequest)           // Legacy POST endpoint
-	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-03-26)
+	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-06-18)
 	mux.HandleFunc("/sse", s.handleMCPSSE)              // Legacy SSE transport (2024-11-05)
 
 	// Health check endpoints
@@ -1009,7 +1009,7 @@ func (s *Server) getOrCreateSession(r *http.Request) string {
 	return sessionID
 }
 
-// handleMCPStreamableHTTP provides streamable HTTP transport (MCP 2025-03-26 spec)
+// handleMCPStreamableHTTP provides streamable HTTP transport (MCP 2025-06-18 spec)
 // Per spec: Each POST request contains exactly ONE JSON-RPC message, server responds and closes connection
 func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
@@ -1228,15 +1228,18 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("X-Accel-Buffering", "no") // Disable buffering in nginx/proxies
 
 	// Get session ID from request
+	clientSessionID := r.Header.Get("Mcp-Session-Id")
 	sessionID := s.getOrCreateSession(r)
 	w.Header().Set("Mcp-Session-Id", sessionID)
 
 	s.logger.WithFields(map[string]interface{}{
-		"remote_addr": r.RemoteAddr,
-		"session_id":  sessionID,
-		"protocol":    "streamable-http",
-		"version":     "2025-03-26",
-	}).Info("MCP Streamable HTTP SSE channel established")
+		"remote_addr":        r.RemoteAddr,
+		"session_id":         sessionID,
+		"client_session_id":  clientSessionID,
+		"session_reused":     clientSessionID != "" && clientSessionID == sessionID,
+		"protocol":           "streamable-http",
+		"version":            "2025-06-18",
+	}).Info("MCP Streamable HTTP channel established")
 
 	// Check if flushing is supported
 	flusher, ok := w.(http.Flusher)
@@ -1246,8 +1249,33 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Send initial comment to establish stream
-	fmt.Fprintf(w, ": MCP SSE stream connected\n\n")
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"session_id":  sessionID,
+	}).Debug("MCP Streamable HTTP: Attempting to send initial SSE comment")
+	
+	n, err := fmt.Fprintf(w, ": MCP SSE stream connected\n\n")
+	if err != nil {
+		s.logger.WithFields(map[string]interface{}{
+			"remote_addr": r.RemoteAddr,
+			"session_id":  sessionID,
+			"error":       err.Error(),
+		}).Error("MCP Streamable HTTP: Failed to write initial comment")
+		return
+	}
+	
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr":  r.RemoteAddr,
+		"session_id":   sessionID,
+		"bytes_written": n,
+	}).Debug("MCP Streamable HTTP: Initial comment written, flushing...")
+	
 	flusher.Flush()
+
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"session_id":  sessionID,
+	}).Info("MCP Streamable HTTP: Initial SSE comment sent and flushed, entering keepalive loop")
 
 	// Keep connection alive with periodic pings
 	ticker := time.NewTicker(30 * time.Second)
@@ -1255,31 +1283,68 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 
 	// Context for handling disconnects
 	ctx := r.Context()
+	
+	s.logger.WithFields(map[string]interface{}{
+		"remote_addr": r.RemoteAddr,
+		"session_id":  sessionID,
+	}).Debug("MCP Streamable HTTP: Waiting for context done or ticker...")
 
 	for {
 		select {
 		case <-ctx.Done():
 			// Client disconnected
 			duration := time.Since(startTime)
+			ctxErr := ctx.Err()
+			
 			s.logger.WithFields(map[string]interface{}{
 				"remote_addr": r.RemoteAddr,
 				"session_id":  sessionID,
 				"duration_ms": duration.Milliseconds(),
 				"protocol":    "streamable-http",
-			}).Info("MCP Streamable HTTP SSE channel closed")
+				"ctx_error":   ctxErr,
+				"ctx_err_str": fmt.Sprintf("%v", ctxErr),
+			}).Warn("MCP Streamable HTTP channel closed - context done")
+			
+			// Log potential causes
+			if ctxErr == context.Canceled {
+				s.logger.WithFields(map[string]interface{}{
+					"remote_addr": r.RemoteAddr,
+					"session_id":  sessionID,
+				}).Warn("Context canceled - likely client closed connection or proxy timeout")
+			} else if ctxErr == context.DeadlineExceeded {
+				s.logger.WithFields(map[string]interface{}{
+					"remote_addr": r.RemoteAddr,
+					"session_id":  sessionID,
+				}).Warn("Context deadline exceeded - likely timeout configuration")
+			}
 			return
 
 		case <-ticker.C:
 			// Send ping to keep connection alive
-			fmt.Fprintf(w, "event: ping\n")
-			fmt.Fprintf(w, "data: {}\n\n")
-			flusher.Flush()
-
 			s.logger.WithFields(map[string]interface{}{
 				"remote_addr": r.RemoteAddr,
 				"session_id":  sessionID,
 				"protocol":    "streamable-http",
-			}).Debug("MCP Streamable HTTP keepalive ping sent")
+			}).Debug("MCP Streamable HTTP: Sending keepalive ping")
+			
+			n, err := fmt.Fprintf(w, "event: ping\ndata: {}\n\n")
+			if err != nil {
+				s.logger.WithFields(map[string]interface{}{
+					"remote_addr": r.RemoteAddr,
+					"session_id":  sessionID,
+					"error":       err.Error(),
+				}).Error("MCP Streamable HTTP: Failed to write ping event")
+				return
+			}
+			
+			flusher.Flush()
+
+			s.logger.WithFields(map[string]interface{}{
+				"remote_addr":  r.RemoteAddr,
+				"session_id":   sessionID,
+				"protocol":     "streamable-http",
+				"bytes_written": n,
+			}).Info("MCP Streamable HTTP keepalive ping sent and flushed")
 		}
 	}
 }
