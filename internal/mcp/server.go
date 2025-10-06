@@ -99,59 +99,96 @@ func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.C
 // Start starts the MCP server
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
-	
-	// Register JSON-RPC API endpoints (custom, non-MCP protocol)
-	mux.HandleFunc("/json/submitJob", s.handleSubmitJob)
-	mux.HandleFunc("/json/getStatus", s.handleGetStatus)
-	mux.HandleFunc("/json/getLogs", s.handleGetLogs)
-	mux.HandleFunc("/json/streamLogs", s.handleStreamLogs)
-	mux.HandleFunc("/json/killJob", s.handleKillJob)
-	mux.HandleFunc("/json/cleanup", s.handleCleanup)
-	mux.HandleFunc("/json/getHistory", s.handleGetHistory)
-	mux.HandleFunc("/json/job/", s.handleJobResource)
 
-	// Register MCP Protocol endpoints
-	mux.HandleFunc("/mcp", s.handleMCPRequest)           // Simple JSON-RPC over HTTP (standard MCP)
+	// RESTful API endpoints (both /json and /mcp prefixes for compatibility)
+	mux.HandleFunc("/json/submitJob", s.handleSubmitJob)
+	mux.HandleFunc("/mcp/submitJob", s.handleSubmitJob)
+	mux.HandleFunc("/json/job/", s.handleJobResource)
+	mux.HandleFunc("/mcp/job/", s.handleJobResource)
+
+	// MCP Protocol endpoints
+	mux.HandleFunc("/mcp", s.handleMCPRequest)           // Legacy POST endpoint
 	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-03-26)
 	mux.HandleFunc("/sse", s.handleMCPSSE)              // Legacy SSE transport (2024-11-05)
-	
+
 	// Health check endpoints
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ready", s.handleReady)
-	
+
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:        fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
+		Handler:     mux,
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout removed - SSE/long-lived connections manage their own lifetime
+		// via context cancellation and keep-alive mechanisms
 	}
-	
+
 	s.logger.WithField("address", server.Addr).Info("Starting MCP server")
-	
+
 	// Start background cleanup routine
 	go s.backgroundCleanup(ctx)
-	
+
 	// Start background job monitoring routine
 	go s.backgroundJobMonitor(ctx)
-	
+
 	return server.ListenAndServe()
 }
 
 // handleSubmitJob handles job submission requests
 func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	
+	// Log incoming REST API request
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "submitJob",
+	}).Info("REST API request received")
+	
 	if r.Method != http.MethodPost {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"status":      http.StatusMethodNotAllowed,
+			"duration_ms": duration.Milliseconds(),
+		}).Warn("REST API request failed: method not allowed")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	
 	var req types.SubmitJobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"status":      http.StatusBadRequest,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Warn("REST API request failed: invalid body")
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
 	}
 	
 	// Validate required fields
 	if err := validateJobConfig(&req.JobConfig); err != nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"status":      http.StatusBadRequest,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Warn("REST API request failed: validation error")
 		s.writeErrorResponse(w, "Job configuration validation failed", http.StatusBadRequest, err.Error())
 		return
 	}
@@ -159,14 +196,33 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// Create new job
 	job, err := s.nomadClient.CreateJob(&req.JobConfig)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to create job")
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"status":      http.StatusInternalServerError,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Error("REST API request failed: job creation error")
 		s.writeErrorResponse(w, "Failed to create job", http.StatusInternalServerError, err.Error())
 		return
 	}
 	
 	// Store job in Consul
 	if err := s.storage.StoreJob(job); err != nil {
-		s.logger.WithError(err).Error("Failed to store job")
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      job.ID,
+			"status":      http.StatusInternalServerError,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Error("REST API request failed: storage error")
 		s.writeErrorResponse(w, "Failed to store job", http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -177,7 +233,18 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	s.writeJSONResponse(w, response)
-	s.logger.WithField("job_id", job.ID).Info("Job submitted successfully")
+	
+	duration := time.Since(startTime)
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "submitJob",
+		"job_id":      job.ID,
+		"status":      http.StatusOK,
+		"duration_ms": duration.Milliseconds(),
+	}).Info("REST API request completed successfully")
 }
 
 // handleGetStatus handles status requests
@@ -1167,7 +1234,9 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 	s.logger.WithFields(map[string]interface{}{
 		"remote_addr": r.RemoteAddr,
 		"session_id":  sessionID,
-	}).Info("MCP SSE stream established")
+		"protocol":    "streamable-http",
+		"version":     "2025-03-26",
+	}).Info("MCP Streamable HTTP SSE channel established")
 
 	// Check if flushing is supported
 	flusher, ok := w.(http.Flusher)
@@ -1196,7 +1265,8 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 				"remote_addr": r.RemoteAddr,
 				"session_id":  sessionID,
 				"duration_ms": duration.Milliseconds(),
-			}).Info("MCP SSE stream closed")
+				"protocol":    "streamable-http",
+			}).Info("MCP Streamable HTTP SSE channel closed")
 			return
 
 		case <-ticker.C:
@@ -1208,7 +1278,8 @@ func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Reque
 			s.logger.WithFields(map[string]interface{}{
 				"remote_addr": r.RemoteAddr,
 				"session_id":  sessionID,
-			}).Debug("MCP SSE ping sent")
+				"protocol":    "streamable-http",
+			}).Debug("MCP Streamable HTTP keepalive ping sent")
 		}
 	}
 }
@@ -1271,7 +1342,9 @@ func (s *Server) handleMCPSSEStream(w http.ResponseWriter, r *http.Request, star
 	s.logger.WithFields(map[string]interface{}{
 		"remote_addr":   r.RemoteAddr,
 		"post_endpoint": postEndpoint,
-	}).Info("MCP SSE stream established, endpoint event sent")
+		"protocol":      "legacy-sse",
+		"version":       "2024-11-05",
+	}).Info("MCP Legacy SSE transport stream established")
 
 	// Keep connection alive and send ping events periodically
 	ticker := time.NewTicker(30 * time.Second)
@@ -1285,13 +1358,19 @@ func (s *Server) handleMCPSSEStream(w http.ResponseWriter, r *http.Request, star
 			s.logger.WithFields(map[string]interface{}{
 				"remote_addr": r.RemoteAddr,
 				"duration_ms": duration.Milliseconds(),
-			}).Info("MCP SSE stream closed")
+				"protocol":    "legacy-sse",
+			}).Info("MCP Legacy SSE transport stream closed")
 			return
 		case <-ticker.C:
 			// Send ping to keep connection alive
 			fmt.Fprintf(w, "event: ping\n")
 			fmt.Fprintf(w, "data: {}\n\n")
 			flusher.Flush()
+
+			s.logger.WithFields(map[string]interface{}{
+				"remote_addr": r.RemoteAddr,
+				"protocol":    "legacy-sse",
+			}).Debug("MCP Legacy SSE keepalive ping sent")
 		}
 	}
 }
@@ -1901,14 +1980,45 @@ func (s *Server) handleJobResource(w http.ResponseWriter, r *http.Request) {
 
 // handleJobStatus handles GET /mcp/job/{jobID}/status
 func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID string) {
+	startTime := time.Now()
+	
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "getStatus",
+		"job_id":      jobID,
+	}).Info("REST API status request received")
+	
 	job, err := s.storage.GetJob(jobID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to get job")
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      jobID,
+			"status":      http.StatusInternalServerError,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Error("REST API status request failed: storage error")
 		s.writeErrorResponse(w, "Failed to get job", http.StatusInternalServerError, "")
 		return
 	}
 	
 	if job == nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      jobID,
+			"status":      http.StatusNotFound,
+			"duration_ms": duration.Milliseconds(),
+		}).Warn("REST API status request failed: job not found")
 		s.writeErrorResponse(w, "Job not found", http.StatusNotFound, "")
 		return
 	}
@@ -1916,7 +2026,7 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID s
 	// Update job status before returning
 	updatedJob, err := s.nomadClient.UpdateJobStatus(job)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to update job status")
+		s.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to update job status from Nomad")
 		// Continue with existing job data rather than failing
 		updatedJob = job
 	}
@@ -1932,30 +2042,85 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID s
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		s.logger.WithError(err).Error("Failed to encode status response")
 		s.writeErrorResponse(w, "Failed to encode response", http.StatusInternalServerError, "")
+		return
 	}
+	
+	duration := time.Since(startTime)
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "getStatus",
+		"job_id":      jobID,
+		"job_status":  updatedJob.Status,
+		"status":      http.StatusOK,
+		"duration_ms": duration.Milliseconds(),
+	}).Info("REST API status request completed")
 }
 
 // handleJobLogs handles GET /mcp/job/{jobID}/logs
 func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request, jobID string) {
+	startTime := time.Now()
+	
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "getLogs",
+		"job_id":      jobID,
+	}).Info("REST API logs request received")
+	
 	// Lock the job to ensure consistent read during potential updates
 	unlock := s.lockJob(jobID)
 	defer unlock()
 	
 	job, err := s.storage.GetJob(jobID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to get job")
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      jobID,
+			"status":      http.StatusInternalServerError,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Error("REST API logs request failed: storage error")
 		s.writeErrorResponse(w, "Failed to get job", http.StatusInternalServerError, "")
 		return
 	}
 	
 	if job == nil {
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      jobID,
+			"status":      http.StatusNotFound,
+			"duration_ms": duration.Milliseconds(),
+		}).Warn("REST API logs request failed: job not found")
 		s.writeErrorResponse(w, "Job not found", http.StatusNotFound, "")
 		return
 	}
 	
 	logs, err := s.nomadClient.GetJobLogs(job)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to get job logs")
+		duration := time.Since(startTime)
+		s.logger.WithFields(map[string]interface{}{
+			"method":      r.Method,
+			"uri":         r.RequestURI,
+			"remote_addr": r.RemoteAddr,
+			"interface":   "REST",
+			"job_id":      jobID,
+			"status":      http.StatusInternalServerError,
+			"duration_ms": duration.Milliseconds(),
+			"error":       err.Error(),
+		}).Error("REST API logs request failed: failed to retrieve logs")
 		s.writeErrorResponse(w, "Failed to get job logs", http.StatusInternalServerError, "")
 		return
 	}
@@ -1969,7 +2134,20 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request, jobID str
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		s.logger.WithError(err).Error("Failed to encode logs response")
 		s.writeErrorResponse(w, "Failed to encode response", http.StatusInternalServerError, "")
+		return
 	}
+	
+	duration := time.Since(startTime)
+	s.logger.WithFields(map[string]interface{}{
+		"method":      r.Method,
+		"uri":         r.RequestURI,
+		"remote_addr": r.RemoteAddr,
+		"interface":   "REST",
+		"endpoint":    "getLogs",
+		"job_id":      jobID,
+		"status":      http.StatusOK,
+		"duration_ms": duration.Milliseconds(),
+	}).Info("REST API logs request completed")
 }
 
 // sendWebhook sends a webhook notification for job events
