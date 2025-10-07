@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the Nomad Build Service, a lightweight, stateless MCP-based server written in Golang. The service enables coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure. It orchestrates builds, tests, and publishes using Buildah for daemonless image building.
+This is the Nomad Build Service, consisting of:
+1. **MCP Server**: Lightweight, stateless Go application providing JSON-RPC over HTTP interface
+2. **CLI Tool**: Command-line client with YAML configuration support and version management
+
+The service enables users and coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure. It orchestrates builds, tests, and publishes using Buildah for daemonless image building.
 
 **For complete project requirements and architecture details, see [PRD.md](PRD.md).**
 
-**Current Status:** Fully implemented and operational. The service provides a complete build-test-publish pipeline with improved Docker-native test execution.
+**Current Status:** Fully implemented and operational. The service provides a complete build-test-publish pipeline with improved Docker-native test execution. MCP transport has been simplified to JSON-RPC over HTTP only.
 
 ## Architecture (Current Implementation)
 
@@ -35,6 +39,7 @@ The system consists of:
 - **CRITICAL**: All MCP server implementations and changes MUST conform to the latest Model Context Protocol specification
 - **Specification URL**: https://modelcontextprotocol.io/specification/latest
 - **Current Protocol Version**: `2025-06-18` (as of latest update)
+- **Supported Transport**: JSON-RPC over HTTP only (SSE and Streamable HTTP have been removed for simplicity)
 - **Required Compliance Areas**:
   - Initialization sequence (initialize request/response, notifications/initialized)
   - Protocol version negotiation
@@ -42,14 +47,14 @@ The system consists of:
   - Notification vs request handling (ID field presence)
   - Tool definitions and invocation format
   - Error codes and error handling
-  - All supported transport methods (HTTP, SSE, Streamable HTTP)
 - When implementing new features or fixing bugs, always verify against the latest spec
 - Integration tests should validate spec compliance
 
 ### Key Libraries to Use
 - `github.com/hashicorp/nomad/api` - Nomad API client
 - `github.com/sirupsen/logrus` - Logging
-- Standard `net/http` or `gorilla/websocket` - HTTP/WebSocket handling
+- `gopkg.in/yaml.v3` - YAML configuration parsing
+- Standard `net/http` - HTTP handling (WebSocket and SSE removed)
 
 ### Security Requirements
 - Buildah must run in rootless mode
@@ -62,14 +67,58 @@ The system consists of:
 - Required parameters must match between both interfaces (owner, repo_url, git_ref, dockerfile_path, image_name, image_tags, registry_url)
 - This prevents runtime errors like "invalid reference format" when Docker image names are malformed due to missing parameters
 
-## MCP API Endpoints (Planned)
+## MCP API Endpoints
 
-The service will expose these MCP endpoints:
+The service exposes these MCP endpoints via JSON-RPC over HTTP:
 - `submitJob`: Submit build request with Git repo, credentials refs, test commands
 - `getStatus`: Poll job status (`PENDING`, `BUILDING`, `TESTING`, `PUBLISHING`, `SUCCEEDED`, `FAILED`)
 - `getLogs`: Retrieve phase-specific logs for debugging
 - `killJob`: Terminate running jobs
-- Cleanup endpoint for resource management
+- `cleanup`: Resource cleanup
+
+## CLI Tool
+
+The `nomad-build` CLI tool provides a user-friendly interface to the build service:
+
+**Key Features:**
+- **YAML Configuration**: Support for both single-file and split-file (global + per-build) configurations
+- **Semantic Versioning**: Automatic patch-level incrementing on each build
+- **Branch-Aware Tagging**: Generates tags in format `<branchname>-vX.Y.Z`
+- **Version Management**: Commands to view and manage versions
+
+**CLI Commands:**
+```bash
+# Submit a build job
+nomad-build submit-job -config build.yaml
+nomad-build submit-job -global deploy/global.yaml -config build.yaml
+nomad-build submit-job --image-tags "v1.0.0,latest" -config build.yaml
+
+# Query job status and logs
+nomad-build get-status <job-id>
+nomad-build get-logs <job-id> [phase]
+
+# Job management
+nomad-build kill-job <job-id>
+nomad-build cleanup <job-id>
+nomad-build get-history [limit] [offset]
+
+# Version management
+nomad-build version-info           # Show current version and branch
+nomad-build version-major <ver>    # Set major version
+nomad-build version-minor <ver>    # Set minor version
+```
+
+**YAML Configuration:**
+The CLI supports YAML job configurations with deep merge capability:
+- **Global config** (`deploy/global.yaml`): Shared settings across all builds
+- **Per-build config** (e.g., `build.yaml`): Build-specific overrides
+- Per-build values override global values for any non-zero field
+
+**Version Tracking:**
+- Stored in `deploy/version.yaml`
+- Auto-increments patch version on each `submit-job` command
+- Uses current git branch for branch-aware tags
+- Example: On branch `feature-auth` with version `0.1.5`, image tagged as `feature-auth-v0.1.5`
 
 ## Development Workflow
 

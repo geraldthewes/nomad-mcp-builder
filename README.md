@@ -1,12 +1,17 @@
 # Nomad Build Service
 
-A lightweight, stateless, MCP-based server written in Go that enables coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure.
+A lightweight build automation system consisting of:
+- **MCP Server**: Stateless Go server providing JSON-RPC over HTTP interface
+- **CLI Tool**: Command-line client with YAML configuration support and version management
+
+The system enables users and coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure.
 
 ## Features
 
-- **MCP Protocol Support**: Full compliance with Model Context Protocol for agent communication
+- **MCP Protocol Support**: JSON-RPC over HTTP for agent communication
+- **CLI Tool**: User-friendly command-line interface with YAML configuration
+- **Semantic Versioning**: Automatic patch incrementing with branch-aware tagging
 - **Three-Phase Build Pipeline**: Build → Test → Publish workflow orchestration
-- **WebSocket Log Streaming**: Real-time log access during builds
 - **Rootless Buildah Integration**: Secure, daemonless container building
 - **Private Registry Workflow**: Intermediate image handling via private registries
 - **Consul/Vault Integration**: Configuration and secret management
@@ -36,40 +41,57 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 
 ## API Endpoints
 
-The service provides **two distinct API types** with multiple transport options:
+The service provides two ways to interact with it:
 
-### 1. MCP Protocol Endpoints (Agent/Tool Integration)
+### 1. CLI Tool (Recommended)
 
-The **Model Context Protocol (MCP)** is used for agent communication. This service supports **three MCP transport methods**:
+The `nomad-build` CLI tool provides the easiest way to interact with the build service:
 
-#### a) Simple JSON-RPC over HTTP (Standard)
+```bash
+# Submit a build job with YAML configuration
+nomad-build submit-job -config build.yaml
+
+# Submit with global config + per-build override
+nomad-build submit-job -global deploy/global.yaml -config build.yaml
+
+# Add additional image tags
+nomad-build submit-job -config build.yaml --image-tags "v1.0.0,latest"
+
+# Query job status and logs
+nomad-build get-status <job-id>
+nomad-build get-logs <job-id> [phase]
+
+# Job management
+nomad-build kill-job <job-id>
+nomad-build cleanup <job-id>
+nomad-build get-history [limit] [offset]
+
+# Version management
+nomad-build version-info           # Show current version and branch
+nomad-build version-major <ver>    # Set major version (resets minor/patch to 0)
+nomad-build version-minor <ver>    # Set minor version (resets patch to 0)
+```
+
+**Key Features:**
+- **YAML Configuration**: Support for global config + per-build overrides
+- **Automatic Versioning**: Auto-increments patch version on each build
+- **Branch-Aware Tags**: Generates tags like `feature-auth-v0.1.5`
+- **Simple Interface**: No need to manually construct JSON-RPC requests
+
+### 2. MCP Protocol Endpoint (Agent/Tool Integration)
+
+The **Model Context Protocol (MCP)** endpoint is used for agent communication:
+
 - **Endpoint:** `/mcp`
-- **Transport:** Single request/response, standard JSON-RPC 2.0
-- **Use with:** MCP Inspector, most MCP clients, testing
+- **Transport:** JSON-RPC 2.0 over HTTP
+- **Use with:** MCP Inspector, MCP clients, coding agents
 - **Connection:** `http://localhost:8080/mcp`
-- **Best for:** Simple integrations, debugging, MCP Inspector
 
-#### b) Streamable HTTP Transport (Modern)
-- **Endpoint:** `/stream`
-- **Transport:** Bidirectional HTTP streaming with chunked encoding
-- **Spec:** MCP 2025-03-26
-- **Use with:** Advanced MCP clients supporting streaming
-- **Connection:** `http://localhost:8080/stream`
-- **Best for:** High-performance streaming applications
+**Supported MCP tools:** `submitJob`, `getStatus`, `getLogs`, `killJob`, `cleanup`, `getHistory`
 
-#### c) SSE Transport (Legacy)
-- **Endpoint:** `/sse`
-- **Transport:** Server-Sent Events (GET) + JSON-RPC (POST)
-- **Spec:** MCP 2024-11-05
-- **Use with:** Older MCP clients, mcp-cli
-- **Connection:** `http://localhost:8080/sse`
-- **Best for:** Backward compatibility
+### 3. Direct JSON-RPC API (Testing/Debugging)
 
-**All three endpoints support the same MCP tools:** `submitJob`, `getStatus`, `getLogs`, `killJob`, `cleanup`, `getHistory`
-
-### 2. Custom JSON-RPC API (Non-MCP Protocol)
-
-Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integrations:
+Direct HTTP/JSON endpoints for testing and non-MCP integrations:
 - `POST /json/submitJob` - Submit build jobs
 - `POST /json/getStatus` - Get job status
 - `POST /json/getLogs` - Get job logs
@@ -177,7 +199,85 @@ curl http://localhost:8080/health
 
 ## Configuration
 
-### Environment Variables
+### CLI YAML Configuration
+
+The CLI tool supports YAML job configurations with a two-file approach:
+
+#### Global Configuration (`deploy/global.yaml`)
+
+Shared settings across all builds:
+
+```yaml
+owner: myteam
+repo_url: https://github.com/myorg/myservice.git
+git_credentials_path: secret/nomad/jobs/git-credentials
+dockerfile_path: Dockerfile
+image_name: myservice
+registry_url: registry.cluster:5000/myapp
+registry_credentials_path: secret/nomad/jobs/registry-credentials
+```
+
+#### Per-Build Configuration (`build.yaml`)
+
+Build-specific overrides:
+
+```yaml
+git_ref: feature/new-feature
+image_tags:
+  - test
+  - dev
+test_entry_point: true
+```
+
+#### Merging Behavior
+
+- Per-build values **override** global values for any non-zero field
+- Arrays (like `image_tags`) are completely replaced, not merged
+- The CLI automatically increments patch version and adds branch-aware tag
+
+#### Usage
+
+```bash
+# With both global and per-build configs
+nomad-build submit-job -global deploy/global.yaml -config build.yaml
+
+# With only per-build config (must include all required fields)
+nomad-build submit-job -config build.yaml
+
+# Add extra tags in addition to auto-generated version tag
+nomad-build submit-job -config build.yaml --image-tags "latest,stable"
+```
+
+#### Version Management
+
+The CLI automatically manages semantic versioning:
+
+```bash
+# Current version stored in deploy/version.yaml
+# File format:
+# version:
+#   major: 0
+#   minor: 1
+#   patch: 5
+
+# View current version
+nomad-build version-info
+# Output:
+#   Version: 0.1.5
+#   Tag: v0.1.5
+#   Branch: feature-new-feature
+#   Branch Tag: feature-new-feature-v0.1.5
+
+# Manual version bumps
+nomad-build version-major 1  # Sets version to 1.0.0
+nomad-build version-minor 2  # Sets version to 0.2.0
+
+# Auto-increment on submit
+# Each 'submit-job' automatically increments patch version
+# and adds branch-aware tag to image_tags
+```
+
+### Server Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|

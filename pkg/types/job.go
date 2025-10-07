@@ -16,48 +16,48 @@ const (
 
 // JobConfig represents the configuration for a build job
 type JobConfig struct {
-	Owner                   string   `json:"owner"`
-	RepoURL                 string   `json:"repo_url"`
-	GitRef                  string   `json:"git_ref"`
-	GitCredentialsPath      string   `json:"git_credentials_path"`
-	DockerfilePath          string   `json:"dockerfile_path"`
-	ImageName               string   `json:"image_name"`
-	ImageTags               []string `json:"image_tags"`
-	RegistryURL             string   `json:"registry_url"`
-	RegistryCredentialsPath string   `json:"registry_credentials_path"`
-	TestCommands            []string `json:"test_commands"`
-	TestEntryPoint          bool     `json:"test_entry_point,omitempty"`
-	ResourceLimits          *ResourceLimits `json:"resource_limits,omitempty"`
-	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty"`
-	TestTimeout             *time.Duration  `json:"test_timeout,omitempty"`
-	ClearCache              bool     `json:"clear_cache,omitempty"`  // Clear build cache before building
-	
+	Owner                   string   `json:"owner" yaml:"owner"`
+	RepoURL                 string   `json:"repo_url" yaml:"repo_url"`
+	GitRef                  string   `json:"git_ref" yaml:"git_ref"`
+	GitCredentialsPath      string   `json:"git_credentials_path" yaml:"git_credentials_path"`
+	DockerfilePath          string   `json:"dockerfile_path" yaml:"dockerfile_path"`
+	ImageName               string   `json:"image_name" yaml:"image_name"`
+	ImageTags               []string `json:"image_tags" yaml:"image_tags"`
+	RegistryURL             string   `json:"registry_url" yaml:"registry_url"`
+	RegistryCredentialsPath string   `json:"registry_credentials_path" yaml:"registry_credentials_path"`
+	TestCommands            []string `json:"test_commands" yaml:"test_commands"`
+	TestEntryPoint          bool     `json:"test_entry_point,omitempty" yaml:"test_entry_point,omitempty"`
+	ResourceLimits          *ResourceLimits `json:"resource_limits,omitempty" yaml:"resource_limits,omitempty"`
+	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty" yaml:"build_timeout,omitempty"`
+	TestTimeout             *time.Duration  `json:"test_timeout,omitempty" yaml:"test_timeout,omitempty"`
+	ClearCache              bool     `json:"clear_cache,omitempty" yaml:"clear_cache,omitempty"`  // Clear build cache before building
+
 	// Webhook configuration for build notifications
-	WebhookURL              string   `json:"webhook_url,omitempty"`              // URL to call on build completion
-	WebhookSecret           string   `json:"webhook_secret,omitempty"`           // Optional secret for webhook authentication
-	WebhookOnSuccess        bool     `json:"webhook_on_success,omitempty"`       // Send webhook on successful builds (default: true)
-	WebhookOnFailure        bool     `json:"webhook_on_failure,omitempty"`       // Send webhook on failed builds (default: true)
-	WebhookHeaders          map[string]string `json:"webhook_headers,omitempty"`   // Optional custom headers
+	WebhookURL              string   `json:"webhook_url,omitempty" yaml:"webhook_url,omitempty"`              // URL to call on build completion
+	WebhookSecret           string   `json:"webhook_secret,omitempty" yaml:"webhook_secret,omitempty"`           // Optional secret for webhook authentication
+	WebhookOnSuccess        bool     `json:"webhook_on_success,omitempty" yaml:"webhook_on_success,omitempty"`       // Send webhook on successful builds (default: true)
+	WebhookOnFailure        bool     `json:"webhook_on_failure,omitempty" yaml:"webhook_on_failure,omitempty"`       // Send webhook on failed builds (default: true)
+	WebhookHeaders          map[string]string `json:"webhook_headers,omitempty" yaml:"webhook_headers,omitempty"`   // Optional custom headers
 }
 
 // PhaseResourceLimits defines resource constraints for a single phase
 type PhaseResourceLimits struct {
-	CPU    string `json:"cpu"`    // e.g., "1000" (MHz)
-	Memory string `json:"memory"` // e.g., "2048" (MB)
-	Disk   string `json:"disk"`   // e.g., "10240" (MB)
+	CPU    string `json:"cpu" yaml:"cpu"`    // e.g., "1000" (MHz)
+	Memory string `json:"memory" yaml:"memory"` // e.g., "2048" (MB)
+	Disk   string `json:"disk" yaml:"disk"`   // e.g., "10240" (MB)
 }
 
 // ResourceLimits defines resource constraints for build jobs per phase
 type ResourceLimits struct {
 	// Legacy fields for backward compatibility
-	CPU    string `json:"cpu,omitempty"`    // e.g., "1000" (MHz) - applies to all phases if per-phase not specified
-	Memory string `json:"memory,omitempty"` // e.g., "2048" (MB) - applies to all phases if per-phase not specified
-	Disk   string `json:"disk,omitempty"`   // e.g., "10240" (MB) - applies to all phases if per-phase not specified
+	CPU    string `json:"cpu,omitempty" yaml:"cpu,omitempty"`    // e.g., "1000" (MHz) - applies to all phases if per-phase not specified
+	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"` // e.g., "2048" (MB) - applies to all phases if per-phase not specified
+	Disk   string `json:"disk,omitempty" yaml:"disk,omitempty"`   // e.g., "10240" (MB) - applies to all phases if per-phase not specified
 
 	// Per-phase resource limits
-	Build   *PhaseResourceLimits `json:"build,omitempty"`
-	Test    *PhaseResourceLimits `json:"test,omitempty"`
-	Publish *PhaseResourceLimits `json:"publish,omitempty"`
+	Build   *PhaseResourceLimits `json:"build,omitempty" yaml:"build,omitempty"`
+	Test    *PhaseResourceLimits `json:"test,omitempty" yaml:"test,omitempty"`
+	Publish *PhaseResourceLimits `json:"publish,omitempty" yaml:"publish,omitempty"`
 }
 
 // GetBuildLimits returns the resource limits for the build phase
