@@ -1,6 +1,7 @@
 # Product Requirements Document (PRD): Refactoring Nomad MCP Builder to a Library-Focused Build Tool
 
 ## Version History
+- **Version 1.2**: Updated draft, October 07, 2025. Incorporates refinements: YAML merging logic, unified deploy/ substructure, expanded SemVer integration, CLI enhancements, completed non-functional requirements, and minor fixes for clarity/consistency.
 - **Version 1.1**: Revised draft, October 07, 2025. Clarifies that the deploy/ subdirectory is managed in the target repository being built (e.g., the repo containing the code and Dockerfiles for the service, such as video-transcription-batch), not in the build tool repository itself.
 - **Version 1.0**: Initial draft, October 07, 2025.
 - **Author**: Grok 4 (AI-assisted proposal based on repository analysis and user feedback).
@@ -33,7 +34,7 @@ The build tool will clone the target repo during the build process, perform oper
 - Updating job config syntax from JSON to YAML.
 - Splitting build pipeline into explicit phases with caller-controlled orchestration.
 - Adding logic to manage a `deploy/` subdirectory in the cloned target repo during builds.
-- Updating documentation (README.md, PRD.m) and tests to reflect changes, including examples from target repos like video-transcription-batch. Thoroughly document the job specification.
+- Updating documentation (README.md, PRD.md) and tests to reflect changes, including examples from target repos like video-transcription-batch. Thoroughly document the job specification.
 - Ensuring semantic versioning best practices are embedded in deployment code within the target repo.
 
 ### Out of Scope
@@ -62,85 +63,84 @@ The build tool will clone the target repo during the build process, perform oper
    - Eliminate MCP endpoints and transports (HTTP stream, SSE).
    - Refactor the server (`cmd/server`) to expose a simple HTTP API for job submission and management, using standard REST or gRPC if needed, but prioritize library/CLI usage.
    - Update the client library (`pkg/client`) to handle direct interactions without MCP wrappers.
-   - Deprecate any MCP-specific code in tests (`test/integration`) but maintain the remaining tests
-
+   - Deprecate any MCP-specific code in tests (`test/integration`) but maintain the remaining tests and expand to cover new YAML/phase logic.
 
 2. **Switch Job Config to YAML**
    - Change job specification format from JSON to YAML for better readability (supports comments, multi-line strings).
    - Example YAML structure (submitted to the build tool, referencing the target repo):
      ```
-	 meta:
-	   - purpose: Purpose of this build
+     meta:
+       purpose: Purpose of this build
      target:
-       - image_name: video-transcription-batch
-       - image_tag: v4.0.0
-	   - registry_url: registry.cluster:5000/myapp
-	   - registry_credentials_path: secret/nomad/jobs/registry-credentials
-	   - webhooks_url: web hooks
-	 build:
-       - git_repo: https://github.com/geraldthewes/video-transcription-batch.git
-       - git_ref: main
-	   - git_credentials_path : secret/nomad/jobs/git-credentials
-       - dockerfile_path: docker/Dockerfile
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480
+       image_name: video-transcription-batch
+       image_tag: v4.0.0
+     registry_url: registry.cluster:5000/myapp
+     registry_credentials_path: secret/nomad/jobs/registry-credentials
+     webhooks_url: webhooks
+     build:
+       git_repo: https://github.com/geraldthewes/video-transcription-batch.git
+       git_ref: main
+       git_credentials_path: secret/nomad/jobs/git-credentials
+       dockerfile_path: docker/Dockerfile
+       resource_limits:
+         cpu: 2000
+         memory: 4096
+         disk: 20480
      test:
-	   - test: true
-	   - test_command: /app/run-tests.sh
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480
-	 publish:
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480	 
+       test: true
+       test_command: /app/run-tests.sh
+       resource_limits:
+         cpu: 2000
+         memory: 4096
+         disk: 20480
+     deploy:
+       resource_limits:
+         cpu: 2000
+         memory: 4096
+         disk: 20480
      ```
-   - Allow breaking the YAML file in a global one and a per run one
-     -- Global
-	      ```
-     target:
-       - image_name: video-transcription-batch
-	   - registry_url: registry.cluster:5000/myapp
-	   - registry_credentials_path: secret/nomad/jobs/registry-credentials
-	 build:
-       - git_repo: https://github.com/geraldthewes/video-transcription-batch.git
-	   - git_credentials_path : secret/nomad/jobs/git-credentials
-       - dockerfile_path: docker/Dockerfile
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480
-     test:
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480
-	 publish:
-	   - resource_limits: 
-	     - cpu: 2000
-		 - memory: 4096
-		 - disk: 20480	 
-     ```
-     -- per build configuration
-     ```
-	 meta:
-	   - purpose: Purpose of this build
-     target:
-       - image_tag: v4.0.0
-	   - webhooks_url: web hooks
-	 build:
-       - git_ref: main
-     test:
-	   - test: true
-	   - test_command: /app/run-tests.sh
-     ```
-	 
-   - Update CLI (`nomad-build`) to parse YAML inputs (e.g., `nomad-build submit -f job.yaml`). Errors are reported to the caller and required attributes checked
+   - Allow breaking the YAML file into a global one and a per-run one. The tool must merge them automatically (per-run overrides global fields; errors on conflicts; fall back to defaults for omitted fields like resource_limits).
+     -- Global (e.g., deploy/global.yaml):
+       ```
+       target:
+         image_name: video-transcription-batch
+       registry_url: registry.cluster:5000/myapp
+       registry_credentials_path: secret/nomad/jobs/registry-credentials
+       build:
+         git_repo: https://github.com/geraldthewes/video-transcription-batch.git
+         git_credentials_path: secret/nomad/jobs/git-credentials
+         dockerfile_path: docker/Dockerfile
+         resource_limits:
+           cpu: 2000
+           memory: 4096
+           disk: 20480
+       test:
+         resource_limits:
+           cpu: 2000
+           memory: 4096
+           disk: 20480
+       deploy:
+         resource_limits:
+           cpu: 2000
+           memory: 4096
+           disk: 20480
+       ```
+     -- Per-build configuration (e.g., build.yaml):
+       ```
+       meta:
+         purpose: Purpose of this build
+       target:
+         image_tag: v4.0.0
+       webhooks_url: webhooks
+       build:
+         git_ref: main
+       test:
+         test: true
+         test_command: /app/run-tests.sh
+       ```
+   - Update CLI (`nomad-build`) to parse YAML inputs (e.g., `nomad-build submit -global deploy/global.yaml -run build.yaml`). Errors are reported to the caller and required attributes checked (e.g., git_repo must be present in global or run).
    - Library methods to accept YAML strings or files.
+   - Make webhooks_url optional for post-build notifications (e.g., success/failure alerts to agents).
 
 3. **Split Build Pipeline into Phases**
    - Define explicit phases: Build (using Buildah to create Docker image), Test (run container tests), Deploy (push to registry).
@@ -151,41 +151,40 @@ The build tool will clone the target repo during the build process, perform oper
 4. **Support for Deploy Subdirectory in Target Repo**
    - Add build tool logic to create/manage `deploy/` dir *in the cloned target repository* (not the build tool repo).
    - Have the deploy tool create a subdirectory called 'builds' under `deploy/` and store all the logs and results in them. As in `deploy/builds/v0.0.13/`
-      - Have a status.md that includes summary phase results
-	  - For each phase store detail logs (stdout and stderr) as in build.md, test.md, deploy.md
+     - Have a status.md that includes summary phase results
+     - For each phase store detail logs (stdout and stderr) as in build.md, test.md, deploy.md
    - Substructure in target repo's `deploy/`:
      - `config.yaml`: Global settings (e.g., registry, resources).
-     - `builds/`: Per-build YAML files (e.g., `2025-10-07-v4.0.0.yaml`) with:
-       - Build version (SemVer).
-       - Git version/ref.
-       - Purpose (e.g., "Update for unified S3 paths").
-       - LLM-generated summary of build output.
+     - `builds/`: Per-build subdirectories (e.g., `v4.0.0/`) containing:
+       - metadata.yaml: With build version (SemVer), git version/ref, purpose (e.g., "Update for unified S3 paths"), LLM-generated summary of build output.
+       - build-summary.md: Condensed LLM summary.
      - `history.yaml` or `history.md`: Appended chronological log of all builds, including summaries for agent review.
-   - Integrate LLM summarization: Add a subagent hook (e.g., library function `SummarizeOutput(logs string) string`) that prompts an LLM to condense build logs and writes to `deploy/builld-summary.md`.
-   - Embed SemVer best practices: Include a `versioning.sh` or Go func to auto-bump versions based on Git commits (using Conventional Commits: feat → minor, fix → patch, breaking → major), executed within the target repo's context.
+   - Integrate LLM summarization: Add a subagent hook (e.g., library function `SummarizeOutput(logs string) string`) that prompts an LLM to condense build logs and writes to `deploy/builds/<version>/build-summary.md`. Make this optional/async if LLM endpoint is unavailable, falling back to raw logs.
+   - Embed SemVer best practices: Include a default `deploy/versioning.sh` template (copied to target repo if missing) or Go func to auto-bump versions based on Git commits (using Conventional Commits: feat → minor, fix → patch, breaking → major), executed within the target repo's context. Tie to YAML's `purpose` field for bump hints (e.g., if purpose indicates breaking, force major).
 
 5. **Update Documentation and Tests**
    - Revise README.md to reflect new approach: Focus on library/CLI usage, YAML examples, phase examples, and how to use `deploy/` in target repos (with video-transcription-batch as an example).
    - If PRD.md exists (assuming it's a product doc), update it to match this PRD's goals.
-   - Create detailed JobSpec.md instead of in README,md documentating the Job Spec in detail
+   - Create detailed JobSpec.md instead of in README.md, documenting the Job Spec in detail (including schema, required fields, defaults, and validation rules).
    - CLAUDE.md (noted as empty or minimal; perhaps for Claude prompts)—expand if needed for LLM integration examples in target repos.
-   - Enhance integration tests to cover YAML parsing, phase splitting, and `deploy/` dir writes in a mocked target repo.
+   - Enhance integration tests to cover YAML parsing (including global/per-run merging), phase splitting, and `deploy/` dir writes in a mocked target repo.
 
 ### Non-Functional Requirements
-- **Performance**: Phase splitting should allow skipping tests
+- **Performance**: Phase splitting should allow skipping tests for <10% overhead in simple builds.
 - **Reliability**: Library/CLI must handle errors gracefully, with clear logging; handle cases where `deploy/` doesn't exist in target repo.
-- **Security**: Retain Vault for secrets; no new vulnerabilities from refactor; ensure cloned repos are handled securely.
+- **Security**: Retain Vault for secrets; no new vulnerabilities from refactor; ensure cloned repos are handled securely; add options to sanitize logs (e.g., redact secrets) before writing to `deploy/`.
 - **Compatibility**: Support existing Nomad job file (`nomad-build-service.nomad`); update for non-MCP API.
 - **Usability**: YAML configs should include schema validation if possible; document target repo integration clearly.
+- **Scalability**: Support concurrent builds via Nomad without state conflicts.
 
 ## Implementation Notes
 - **Step-by-Step for Coding Agent**:
-  1. Clone build tool repo and create feature branch (e.g., `refactor-to-library-focus`).
+  1. Clone build tool repo and create feature branch (e.g., `refactor-to-cli`).
   2. Remove MCP code: Delete transport handlers in server; refactor endpoints to simple HTTP.
   3. Implement YAML parsing: Use `gopkg.in/yaml.v3` in client and server.
   4. Split phases: Refactor job runner to modular functions; expose in library.
-  5. Add target repo `deploy/` support: In build logic, after git clone, create/update `deploy/` files; include optional commit/push flags.
-  6. Add summarization: Implement a placeholder LLM call (e.g., via HTTP to a model endpoint) and write to target `deploy/`.
+  5. Add target repo `deploy/` support: In build logic, after git clone, create/update `deploy/` files; include optional commit/push flags; handle outputs back to local target repo via Nomad artifacts or post-job fetch.
+  6. Add summarization: Implement a placeholder LLM call (e.g., via HTTP to a configurable model endpoint) and write to target `deploy/`.
   7. Update README: Rewrite usage sections with YAML examples, emphasizing target repo `deploy/` (reference video-transcription-batch structure).
   8. Run tests: Fix/adapt `go test ./internal/...` and integration tests, using mocked target repos.
   9. Commit and PR: Include this PRD as `docs/refactor-prd.md`.
@@ -195,11 +194,14 @@ The build tool will clone the target repo during the build process, perform oper
   - YAML parsing errors: Add robust validation and error messages.
   - History file growth in target repo: Implement rotation or archiving for large histories.
   - Git access issues: Document requirements for build tool to have push access if updating target repo.
+  - LLM dependency: Fallback to raw logs if endpoint unavailable; make summarization optional to avoid build delays.
 
 - **Success Metrics**:
   - Successful build/test/deploy via CLI/library without MCP, updating `deploy/` in target repo.
   - Agents can read/write to target repo's `deploy/` for history review.
   - Reduced issues with tool calls in Qwen-like models.
+  - YAML validation passes for 100% of example configs.
+  - Build history accurately appends summaries in target repo after 10 simulated runs.
 
 ## Appendices
 - **Inspiration Reference**: Based on standard PRD templates (e.g., problem/solution focus, requirements breakdown), inspired by AI-dev task examples emphasizing clear, actionable specs for agents.
