@@ -184,6 +184,16 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log full request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "submitJob",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Submit job request details")
+	}
+	
 	// Validate required fields
 	if err := validateJobConfig(&req.JobConfig); err != nil {
 		duration := time.Since(startTime)
@@ -267,6 +277,16 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getStatus",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get status request details")
+	}
+	
 	// Get job from storage
 	job, err := s.storage.GetJob(req.JobID)
 	if err != nil {
@@ -308,6 +328,16 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
+	}
+	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getLogs",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get logs request details")
 	}
 	
 	// Get job from storage
@@ -393,6 +423,16 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "killJob",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Kill job request details")
+	}
+	
 	// Get job from storage
 	job, err := s.storage.GetJob(req.JobID)
 	if err != nil {
@@ -437,6 +477,16 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "cleanup",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Cleanup request details")
+	}
+	
 	var cleanedJobs []string
 	var err error
 	
@@ -475,6 +525,16 @@ func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
+	}
+	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getHistory",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get history request details")
 	}
 	
 	// Set defaults
