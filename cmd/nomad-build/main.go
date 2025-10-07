@@ -18,70 +18,151 @@ import (
 const (
 	defaultServiceURL = "http://localhost:8080"
 	defaultDeployDir  = "deploy"
-	usage = `nomad-build - CLI client for nomad build service
+	usage = `nomad-build - CLI client for Nomad Build Service
 
-Usage:
-  nomad-build [flags] <command> [args...]
+USAGE:
+  nomad-build [global-flags] <command> [command-args...]
 
-Commands:
-  submit-job [options] [config]     Submit a new build job
-  get-status <job-id>               Get status of a job
-  get-logs <job-id> [phase]         Get logs for a job (optional phase: build, test, publish)
-  kill-job <job-id>                 Kill a running job
-  cleanup <job-id>                  Clean up resources for a job
-  get-history [limit] [offset]      Get job history (optional limit, optional offset)
-  version-info                      Show current version
-  version-major <major>             Set major version (resets minor and patch to 0)
-  version-minor <minor>             Set minor version (resets patch to 0)
+DESCRIPTION:
+  A command-line interface for the Nomad Build Service. Supports YAML
+  configuration files, automatic semantic versioning, and branch-aware
+  image tagging.
 
-Global Flags:
+COMMANDS:
+  Job Management:
+    submit-job [options] [config]     Submit a new build job
+    get-status <job-id>               Get status of a job
+    get-logs <job-id> [phase]         Get logs for a job (phase: build, test, publish)
+    kill-job <job-id>                 Kill a running job
+    cleanup <job-id>                  Clean up resources for a job
+    get-history [limit] [offset]      Get job history (default: 10 recent jobs)
+
+  Version Management:
+    version-info                      Show current version and branch information
+    version-major <major>             Set major version (resets minor and patch to 0)
+    version-minor <minor>             Set minor version (resets patch to 0)
+
+GLOBAL FLAGS:
   -h, --help                Show this help message
   -u, --url <url>           Service URL (default: http://localhost:8080)
                             Can also be set via NOMAD_BUILD_URL environment variable
 
-Submit-Job Options:
+SUBMIT-JOB OPTIONS:
   -global <file>            Global YAML configuration file (optional)
-  -config <file>            Per-build YAML configuration file (required if using YAML)
+                            Typically: deploy/global.yaml
+
+  -config <file>            Per-build YAML configuration file (required for YAML mode)
+                            Per-build values override global values
+
   --image-tags <tags>       Additional image tags to append (comma-separated)
+                            Added to auto-generated version tag
 
-  If neither -global nor -config is specified, reads JSON or YAML from stdin or argument
+  If neither -global nor -config is specified, reads JSON or YAML from stdin or argument.
 
-Examples:
-  # Submit job using YAML files (global + per-build)
-  nomad-build submit-job -global deploy/global.yaml -config build.yaml
+VERSION MANAGEMENT:
+  The CLI automatically manages semantic versioning in deploy/version.yaml:
 
-  # Submit job using single YAML file
-  nomad-build submit-job -config build.yaml
+  • Each 'submit-job' auto-increments the patch version
+  • Generates branch-aware tags: <branch>-v<MAJOR>.<MINOR>.<PATCH>
+  • Example: On branch 'feature-auth' with version 0.1.5
+             → tag: feature-auth-v0.1.5
 
-  # Submit job from JSON argument (legacy mode)
-  nomad-build submit-job '{"owner":"test","repo_url":"https://github.com/example/repo.git",...}'
+  Version file format (deploy/version.yaml):
+    version:
+      major: 0
+      minor: 1
+      patch: 5
 
-  # Submit job from stdin (JSON or YAML)
-  cat build.yaml | nomad-build submit-job
+YAML CONFIGURATION:
+  Global config (deploy/global.yaml) - Shared settings:
+    owner: myteam
+    repo_url: https://github.com/myorg/myservice.git
+    git_credentials_path: secret/nomad/jobs/git-credentials
+    image_name: myservice
+    registry_url: registry.example.com:5000/myapp
 
-  # Submit with additional image tags
-  nomad-build submit-job -config build.yaml --image-tags "v4.0.16,latest"
+  Per-build config (build.yaml) - Build-specific overrides:
+    git_ref: feature/new-feature
+    image_tags:
+      - test
+      - dev
+    test_entry_point: true
 
-  # Get job status
-  nomad-build get-status abc123
+  See docs/JobSpec.md for complete configuration reference.
 
-  # Get build logs
-  nomad-build get-logs abc123 build
+EXAMPLES:
+  Submit Jobs:
+    # With global + per-build YAML configs (recommended)
+    nomad-build submit-job -global deploy/global.yaml -config build.yaml
 
-  # Kill job
-  nomad-build kill-job abc123
+    # With single YAML config (must include all required fields)
+    nomad-build submit-job -config build.yaml
 
-  # Clean up job
-  nomad-build cleanup abc123
+    # With additional tags beyond auto-generated version tag
+    nomad-build submit-job -config build.yaml --image-tags "latest,stable"
 
-  # Get history
-  nomad-build get-history
-  nomad-build get-history 10 0
+    # From stdin (supports JSON or YAML)
+    cat build.yaml | nomad-build submit-job
 
-  # Version management
-  nomad-build version-info
-  nomad-build version-major 1
-  nomad-build version-minor 2
+    # Legacy: From JSON string argument
+    nomad-build submit-job '{"owner":"test","repo_url":"https://github.com/example/repo.git",...}'
+
+  Query Jobs:
+    # Get job status
+    nomad-build get-status abc123
+
+    # Get all logs
+    nomad-build get-logs abc123
+
+    # Get phase-specific logs
+    nomad-build get-logs abc123 build
+    nomad-build get-logs abc123 test
+    nomad-build get-logs abc123 publish
+
+    # Get job history (last 20 jobs)
+    nomad-build get-history 20
+
+    # Get job history with pagination
+    nomad-build get-history 10 20  # limit=10, offset=20
+
+  Manage Jobs:
+    # Kill a running job
+    nomad-build kill-job abc123
+
+    # Clean up job resources
+    nomad-build cleanup abc123
+
+  Version Management:
+    # Show current version and branch
+    nomad-build version-info
+    # Output:
+    #   Version: 0.1.5
+    #   Tag: v0.1.5
+    #   Branch: feature-new-feature
+    #   Branch Tag: feature-new-feature-v0.1.5
+
+    # Bump major version (creates v1.0.0)
+    nomad-build version-major 1
+
+    # Bump minor version (e.g., v0.2.0)
+    nomad-build version-minor 2
+
+    # Note: Patch version auto-increments on each submit-job
+
+ENVIRONMENT VARIABLES:
+  NOMAD_BUILD_URL           Service URL (overrides default, can be overridden by -u flag)
+
+FILES:
+  deploy/version.yaml       Current version tracking
+  deploy/global.yaml        Global configuration (optional)
+  build.yaml                Per-build configuration
+
+DOCUMENTATION:
+  docs/JobSpec.md           Complete job configuration reference
+  README.md                 Project overview and setup guide
+  CLAUDE.md                 Development guidelines
+
+For more information, visit: https://github.com/geraldthewes/nomad-mcp-builder
 `
 )
 
