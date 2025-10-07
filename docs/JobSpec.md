@@ -4,7 +4,7 @@ This document describes the complete job configuration schema for the Nomad Buil
 
 ## Overview
 
-Job configurations can be provided in either **JSON** or **YAML** format. The CLI tool supports YAML with a two-file approach (global + per-build), while the MCP and JSON-RPC APIs accept either format.
+Job configurations can be provided in either **JSON** or **YAML** format. The CLI tool supports YAML with a two-file approach (global + per-build), while the JSON-RPC APIs accept either format.
 
 ## Required Fields
 

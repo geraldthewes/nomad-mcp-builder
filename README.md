@@ -21,9 +21,17 @@ The system enables users and coding agents to submit Docker image build jobs rem
 ## Architecture
 
 ```
+
+┌─────────────┐
+│   Agent     │
+│             │
+└─────────────┘
+      │
+      ▼
+
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Agent     │───▶│ MCP Server  │───▶│   Nomad     │
-│             │    │             │    │  Cluster    │
+│   CLI       │───▶│   Build     │───▶│   Nomad     │
+│             │    │   Server    │    │  Cluster    │
 └─────────────┘    └─────────────┘    └─────────────┘
                            │                   │
                            ▼                   ▼
