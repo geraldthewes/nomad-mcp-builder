@@ -1,20 +1,18 @@
-
-
 # Product Requirements Document (PRD): Nomad Build Service (Version 2.0)
 
-## 1\. Overview
+## 1. Overview
 
 ### 1.1 Product Description
 
-Nomad Build Service is a lightweight, stateless, MCP-based server written in Golang that enables coding agents to submit Docker image build jobs remotely. It orchestrates builds, tests, and publishes using Nomad as the backend infrastructure, ensuring all operations (server, builds, tests) run as Nomad jobs. The service uses Buildah for daemonless image building from Dockerfiles in git repos, supports test execution with network access, provides detailed build logs for error analysis, and publishes successful images to Docker private registries.
+Nomad Build Service is a lightweight, stateless server written in Golang that enables coding agents to submit Docker image build jobs remotely. It orchestrates builds, tests, and publishes using Nomad as the backend infrastructure, ensuring all operations (server, builds, tests) run as Nomad jobs. The service uses Buildah for daemonless image building from Dockerfiles in git repos, supports test execution with network access, provides detailed build logs for error analysis, and publishes successful images to Docker private registries.
 
-**Important**: The service implements graceful job termination to prevent corruption during Docker and registry operations. Users must NEVER use direct Nomad job commands (`nomad job stop`, `nomad job deregister`, etc.) to terminate build service jobs. Always use the service's `killJob` MCP endpoint instead.
+**Important**: The service implements graceful job termination to prevent corruption during Docker and registry operations. Users must NEVER use direct Nomad job commands (`nomad job stop`, `nomad job deregister`, etc.) to terminate build service jobs. Always use the service's `killJob` endpoint instead.
 
 This product is designed for agentic code development, offloading resource-intensive builds to remote Nomad clusters while empowering agents to debug failures autonomously through accessible logs.
 
 ### 1.2 Target Audience
 
-* **AI Coding Agents:** The primary user, interacting via the MCP protocol for secure, contextual, and automated build-test-deploy workflows. The service provides both polling and WebSocket interfaces to accommodate different agent capabilities and preferences.  
+* **AI Coding Agents:** The primary user, interacting via API for secure, contextual, and automated build-test-deploy workflows. The service provides both polling and WebSocket interfaces to accommodate different agent capabilities and preferences.  
 * **Developers:** Individuals building containerized applications environments who can leverage the service for standardized builds.
 
 ### 1.3 Business Goals
@@ -31,15 +29,14 @@ This product is designed for agentic code development, offloading resource-inten
 * **As a coding agent, after a successful build, I need the service to run my specified test commands against the new image** to verify my code changes work as expected.  
 * **As a coding agent, when my tests fail, I need to access the test output logs** so that I can debug the application logic, push a fix, and trigger a new build and test run.
 
-## 2\. Scope
+## 2. Scope
 
 ### 2.1 In Scope
 
-* **MCP Protocol Compliance:** The MCP server implementation MUST conform to the latest Model Context Protocol specification as defined at https://modelcontextprotocol.io/specification/latest. All protocol changes, feature additions, and bug fixes must maintain compliance with the specification, including proper initialization sequences, protocol version negotiation, JSON-RPC 2.0 message formatting, notification handling, and transport layer requirements.
-* MCP server for job submission, status queries, and log retrieval.
+* API server for job submission, status queries, and log retrieval.
 * Nomad job orchestration for: repo cloning, image building (via Buildah), testing (running commands within the new image), and publishing.
 * Support for network access during the test phase (e.g., for connecting to databases or other services like S3).
-* Robust error handling with full, phase-specific logs accessible via MCP.
+* Robust error handling with full, phase-specific logs accessible via API.
 * Secure credential handling using pre-populated Nomad Vault variables for Git and container registries.
 * Leveraging Buildah's layer caching via a persistent host volume to accelerate builds, especially for images with extensive dependencies (e.g., CUDA, Python packages).
 
@@ -47,24 +44,24 @@ This product is designed for agentic code development, offloading resource-inten
 
 * **Advanced Volume Support (Initial Version):** Direct mounting of arbitrary host volumes during tests will be deferred to a future version to simplify the initial implementation.  
 * **Full Git Integration:** The service will not integrate with Git webhooks or triggers; the agent is responsible for initiating a job by submitting a job configuration.  
-* **Advanced Multi-User Authentication:** Authentication is handled at the infrastructure level by Nomad ACLs and secure MCP communication, not within the application itself.  
+* **Advanced Multi-User Authentication:** Authentication is handled at the infrastructure level by Nomad ACLs and secure API communication, not within the application itself.  
 * **Non-Dockerfile Builds:** The service assumes the input is always a Git repository containing a Dockerfile.  
 * **Integrated Image Scanning:** Security and vulnerability scanning are considered extensions to be added in the future.
 
-## 3\. Features and Requirements
+## 3. Features and Requirements
 
 ### 3.1 Functional Requirements
 
 #### FR1: Job Submission
 
 * The agent will commit their changes to a new build branch, publish their changes to the git repo before evoking the build. Further changes made until  the build succeeds and tests passes shall be made by the agent on the same branch.   
-* The agent submits a build request via an MCP endpoint via a configuration descriptor to be documented.  
+* The agent submits a build request via an API endpoint via a configuration descriptor to be documented.  
 * The server validates the inputs and generates a unique job ID.  
 * **Secrets Handling:** The agent passes references (e.g., `nomad/jobs/my-repo-secret`) to pre-populated secrets in Nomad's Vault for private Git repositories and container registries. The service itself does not handle raw credentials.
 * **Git Authentication:** Supports SSH keys and Personal Access Tokens via Vault secret injection, both referenced in job config as `git_credentials_path`.  
 * Once the build and the test passes, the branch will be merged by the agent back in the current development branch.
 
-#### FR1.1: MCP API Contract (Example)
+#### FR1.1: API Contract (Example)
 
 A build submission request from the agent could look like this:
 
@@ -72,27 +69,27 @@ A build submission request from the agent could look like this:
 
   "owner": "John Doe",
 
-  "repo\_url": "https://github.com/my-org/my-app.git",
+  "repo_url": "https://github.com/my-org/my-app.git",
 
-  "git\_ref": "main",
+  "git_ref": "main",
 
-  "git\_credentials\_path": "nomad/jobs/my-git-creds",
+  "git_credentials_path": "nomad/jobs/my-git-creds",
 
-  "dockerfile\_path": "Dockerfile",
+  "dockerfile_path": "Dockerfile",
 
-  "image\_tags": \["latest", "1.2.3"\],
+  "image_tags": ["latest", "1.2.3"],
 
-  "registry\_url": "docker.io/my-org/my-app",
+  "registry_url": "docker.io/my-org/my-app",
 
-  "registry\_credentials\_path": "nomad/jobs/my-registry-creds",
+  "registry_credentials_path": "nomad/jobs/my-registry-creds",
 
-  "test\_commands": \[
+  "test_commands": [
 
-    "/app/run\_unit\_tests.sh",
+    "/app/run_unit_tests.sh",
 
-    "/app/run\_integration\_tests.sh"
+    "/app/run_integration_tests.sh"
 
-  \],
+  ],
   
   "test_entry_point" : false
 
@@ -127,9 +124,9 @@ A build submission request from the agent could look like this:
 #### FR5: Logging and Monitoring
 
 * **Real-time Status Updates:** The service should provide access to real-time status updates (e.g., `PENDING`, `BUILDING`, `TESTING`, `PUBLISHING`, `SUCCEEDED`, `FAILED`) via a polling `getStatus` endpoint.  
-* **Accessible Logs:** The agent must be able to retrieve detailed, separated logs for each phase (build, test, publish) via a `getLogs` MCP endpoint using the job ID. This is critical for enabling the agent to diagnose and fix errors autonomously. The logs should be the raw output from the underlying Buildah commands. The logs should be accessible during the build and test process to interrupt if necessary.  
+* **Accessible Logs:** The agent must be able to retrieve detailed, separated logs for each phase (build, test, publish) via a `getLogs` endpoint using the job ID. This is critical for enabling the agent to diagnose and fix errors autonomously. The logs should be the raw output from the underlying Buildah commands. The logs should be accessible during the build and test process to interrupt if necessary.  
 * Please be clear if any infrastructure is required for storing the logs (example prometheus.)  
-* **Actionable Error Reporting:** On failure, the MCP response should clearly indicate the failed phase and provide direct access to its logs. The goal is to give the agent all necessary information to self-correct.
+* **Actionable Error Reporting:** On failure, the API response should clearly indicate the failed phase and provide direct access to its logs. The goal is to give the agent all necessary information to self-correct.
 
 #### FR6: Graceful Job Termination
 
@@ -139,7 +136,7 @@ A build submission request from the agent could look like this:
   * During test phase: Safely terminates test containers without affecting other phases
   * During publish phase: Allows registry push operations to complete before stopping (prevents corrupted registry state)
   * Fallback: If graceful stop fails, the system will force termination as a last resort
-* **Important**: Callers must NEVER use direct Nomad job commands (`nomad job stop`, etc.) to terminate build service jobs, as this bypasses graceful termination safeguards. Always use the `killJob` MCP endpoint instead.
+* **Important**: Callers must NEVER use direct Nomad job commands (`nomad job stop`, etc.) to terminate build service jobs, as this bypasses graceful termination safeguards. Always use the `killJob` endpoint instead.
 
 #### FR7: Query and Streaming Endpoints
 
@@ -200,7 +197,7 @@ A build submission request from the agent could look like this:
 * **Dual Input Support:** The CLI must support JSON job configurations from both command-line arguments and stdin, enabling flexible integration with scripts and automation tools.
 * **Service Discovery Integration:** Automatic integration with Consul service discovery to locate the build service without hardcoding addresses.
 * **Environment Configuration:** Support for service URL configuration via `NOMAD_BUILD_URL` environment variable for CI/CD pipeline integration.
-* **Complete Feature Parity:** The CLI must provide access to all MCP functionality including:
+* **Complete Feature Parity:** The CLI must provide access to all functionality including:
   * `submit-job` - Submit build jobs with JSON configuration
   * `get-status` - Query job status with detailed metrics
   * `get-logs` - Retrieve logs for all phases (build, test, publish) with optional phase filtering
@@ -239,8 +236,6 @@ Flags:
 
 ### 3.2 Non-Functional Requirements
 
-#### 
-
 #### NFR1: Best Practices
 
 * Log everything: Log all tool calls, including inputs, outputs, and timestamps. Comprehensive logging is essential for troubleshooting and post-mortem analysis when things go wrong.  
@@ -248,7 +243,6 @@ Flags:
 * Plan for future custom dashboards: Use monitoring platforms with customizable dashboards to visualize key metrics like response times and task completion rates. This helps track performance and spot recurring issues.  
 * Review and follow all current best practices for all the components of this service.  
 * Verify and use the latest stable version of all components of this service.
-
 
 #### NFR2: Performance
 
@@ -268,7 +262,7 @@ Flags:
 
 #### NFR4: Usability
 
-* The MCP API must be simple, with clear JSON request and response schemas.  
+* The API must be simple, with clear JSON request and response schemas.  
 * Error messages in logs must be detailed and directly reflect the output from the underlying tools to aid agent debugging.
 
 #### NFR4.1: Timestamp Standards
@@ -287,7 +281,6 @@ Flags:
 * **Go:** Version 1.22+  
 * **Nomad:** Version 1.10+ (with Vault integration enabled)  
 * **Buildah:** Latest stable version (`quay.io/buildah/stable`)  
-* **MCP:** Official MCP Go SDK from https://github.com/modelcontextprotocol/go-sdk
 
 #### NFR7: Container Requirements
 
@@ -311,24 +304,23 @@ Flags:
   * `test_timeout`: Maximum test duration (default: 15 minutes)
   * `registry_config`: Default registry settings
 
-## 4\. Technical Stack
+## 4. Technical Stack
 
 * **Language:** Golang  
 * **Key Libraries:**  
   * Nomad API: `github.com/hashicorp/nomad/api`  
-  * MCP: Official MCP Go SDK (`github.com/modelcontextprotocol/go-sdk`)  
   * Configuration: `github.com/hashicorp/consul/api`  
   * Secrets: `github.com/hashicorp/vault/api`  
   * Metrics: `github.com/prometheus/client_golang`  
   * Logging: `github.com/sirupsen/logrus`  
   * HTTP/WebSockets: Standard `net/http` or `gorilla/websocket`  
 * **Deployment:** The service itself will be deployed as a Dockerized application running as a Nomad service job, exposing its API port.  
-* **Testing:** Unit tests for MCP handlers and integration tests using a mocked Nomad API.
+* **Testing:** Unit tests for API handlers and integration tests using a mocked Nomad API.
 
-## 5\. Architecture
+## 5. Architecture
 
 ### 5.1 Components
-* **MCP Server:** A stateless Go application listening for agent requests. It acts as a control plane, translating MCP requests into Nomad API calls.  
+* **API Server:** A stateless Go application listening for agent requests. It acts as a control plane, translating API requests into Nomad API calls.  
 * **Nomad Client:** Integrated into the Go application to communicate with the Nomad cluster API.  
 * **Build/Test/Push Jobs:** Ephemeral Nomad batch jobs that execute the different phases.
 
@@ -367,7 +359,7 @@ Flags:
   3. Pushes final images to target registry using `buildah push`
 
 ### 5.3 Data Flow
-1. Agent sends a `submitJob` request via MCP to the server.  
+1. Agent sends a `submitJob` request via API to the server.  
 2. The server validates the request and submits a "build" job to the Nomad API.  
 3. Upon successful completion of the build job, multiple "test" jobs are submitted (one per test command or one for entry point testing).
 4. Upon successful completion of ALL test jobs, a "publish" job to the docker registry is submitted.  
@@ -376,24 +368,21 @@ Flags:
 ### 5.4 Job Atomicity
 The server orchestrates the sequence of jobs. If any job in the sequence fails, the orchestration stops, and the overall job ID is marked as `FAILED`. The build-test-publish workflow is treated as a single atomic operation.
 
-## 6\. Assumptions and Dependencies
+## 6. Assumptions and Dependencies
 
 * A running Nomad cluster is available and configured with the Docker driver.  
 * Nomad clients have access to the persistent volume path for Buildah caching.  
 * For GPU-dependent builds, relevant Nomad clients are configured with the necessary GPU drivers and device plugins.  
-* The AI agent correctly implements an MCP client for communication.  
 * Nomad is integrated with Vault for secret management.
 
-## 7\. Risks and Mitigations
+## 7. Risks and Mitigations
 
 * **Risk:** Nomad API rate limiting under heavy load.  
   * **Mitigation:**None  
 * **Risk:** Long-running or stuck jobs.  
   * **Mitigation:** Configure aggressive timeouts on all Nomad batch jobs to prevent them from consuming resources indefinitely. Allow override in the Job description for long jobs.
 
-
-## 8\. Success Metrics
+## 8. Success Metrics
 
 * Demonstrated ability of a test agent to successfully submit a job, receive logs from a failed build, and use those logs to trigger a corrected build.  
-  * For example build and execute the hello-world docker image https://hub.docker.com/\_/hello-world
-
+  * For example build and execute the hello-world docker image https://hub.docker.com/_/hello-world
