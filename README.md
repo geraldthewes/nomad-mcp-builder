@@ -1186,6 +1186,119 @@ The integration test is configurable via environment variables:
 - `CONSUL_HTTP_ADDR` - Consul address (default: `10.0.1.12:8500`)
 - Test timeout is set to 15 minutes to allow for complete build cycles
 
+### Webhook Integration Tests
+
+The project includes webhook notification tests that verify the complete webhook delivery system. These tests are **opt-in** due to network requirements.
+
+#### Network Requirements
+
+Webhook tests require bidirectional network connectivity:
+- The test creates a local webhook receiver
+- The Nomad cluster must be able to reach the test machine's IP
+- Works automatically with VPN setups (e.g., WireGuard, OpenVPN)
+
+#### Running Webhook Tests
+
+```bash
+# Enable webhook tests (auto-detects correct network interface)
+ENABLE_WEBHOOK_TESTS=true go test ./test/integration -v -run TestWebhookNotifications
+
+# Override IP selection if auto-detection fails
+ENABLE_WEBHOOK_TESTS=true WEBHOOK_TEST_IP=10.0.6.17 go test ./test/integration -v -run TestWebhookNotifications
+```
+
+#### How IP Selection Works
+
+The test intelligently selects the correct network interface using a 3-strategy approach:
+
+1. **Environment Override** (highest priority):
+   ```bash
+   export WEBHOOK_TEST_IP=10.0.6.17
+   ```
+
+2. **Auto-Detection** (recommended):
+   - Dials the discovered service URL
+   - Uses the local interface that can reach the service
+   - Example: Service at `10.0.1.16` → Selects VPN interface `10.0.6.17`
+
+3. **Network Scan Fallback**:
+   - Searches for interfaces in `10.0.x.x` range
+   - Useful for cluster network setups
+
+4. **Default Route Fallback**:
+   - Uses default route if all else fails
+
+#### Example Network Setup
+
+**Typical VPN Configuration:**
+```
+Developer Machine:
+├─ WiFi: 192.168.0.149 (home network)
+├─ VPN:  10.0.6.17 (WireGuard - cluster access)
+└─ Docker: 172.17.0.1 (local)
+
+Nomad Cluster: 10.0.1.x network
+
+Webhook Test Flow:
+Service (10.0.1.16) → VPN Bridge → Test Receiver (10.0.6.17:8889)
+```
+
+#### What the Test Validates
+
+The webhook test verifies:
+- ✅ Webhook receiver starts and binds correctly
+- ✅ Build job submission with webhook configuration
+- ✅ Webhook delivery for all job phases (build/test/publish)
+- ✅ HMAC-SHA256 signature authentication
+- ✅ Custom header propagation
+- ✅ Job completion notification
+- ✅ Proper error handling and retries
+
+#### Troubleshooting Webhook Tests
+
+**Test skips immediately:**
+```bash
+# Make sure to enable the test
+ENABLE_WEBHOOK_TESTS=true go test ./test/integration -run TestWebhookNotifications
+```
+
+**Webhooks not received (check server logs):**
+```bash
+# View webhook delivery attempts
+nomad alloc logs -stderr <alloc-id> | grep -i webhook
+
+# Look for "context deadline exceeded" errors
+# This indicates network connectivity issues
+```
+
+**Wrong IP selected:**
+```bash
+# Check available interfaces
+ip addr
+
+# Manually specify the correct IP
+WEBHOOK_TEST_IP=10.0.6.17 ENABLE_WEBHOOK_TESTS=true go test ./test/integration -run TestWebhookNotifications
+```
+
+**Network Connectivity Test:**
+```bash
+# From your machine, verify you can reach the cluster
+ping 10.0.1.16
+
+# From the cluster, verify it can reach your machine (if possible)
+# The webhook test will show selected IP in its output
+```
+
+#### Why Webhook Tests Are Opt-In
+
+Webhook tests are disabled by default because:
+- They require network accessibility from the Nomad cluster
+- They depend on VPN or network bridge configuration
+- They take longer to run (15-20 seconds)
+- Most development workflows don't require webhook testing
+
+For CI/CD environments with proper network setup, enable them in your pipeline configuration.
+
 ## Contributing
 
 1. Fork the repository
