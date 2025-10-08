@@ -1505,9 +1505,7 @@ func validateJobConfig(config *types.JobConfig) error {
 	if config.ImageName == "" {
 		return fmt.Errorf("image_name is required")
 	}
-	if len(config.ImageTags) == 0 {
-		return fmt.Errorf("image_tags is required and cannot be empty")
-	}
+	// image_tags is optional - will default to job-id if not provided
 	if config.RegistryURL == "" {
 		return fmt.Errorf("registry_url is required")
 	}
@@ -1517,7 +1515,7 @@ func validateJobConfig(config *types.JobConfig) error {
 		// This is allowed - no testing will be performed
 	}
 	
-	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands)
+	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands, image_tags)
 	// are allowed to be empty
 	
 	return nil

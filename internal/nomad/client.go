@@ -89,6 +89,14 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 
 	jobID := uuid.New().String()
 	now := time.Now()
+	
+	// Default image_tags to job-id if not provided
+	if len(jobConfig.ImageTags) == 0 {
+		jobConfig.ImageTags = []string{jobID}
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": jobID,
+		}).Info("No image_tags provided, defaulting to job-id")
+	}
 
 	job := &types.Job{
 		ID:        jobID,
