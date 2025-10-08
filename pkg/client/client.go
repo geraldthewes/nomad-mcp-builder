@@ -213,6 +213,27 @@ func (c *Client) GetHistory(limit int, offset int) (*types.GetHistoryResponse, e
 	return &response, nil
 }
 
+// Health checks the health of the service
+func (c *Client) Health() (*types.HealthResponse, error) {
+	resp, err := c.doRequest("GET", "/health", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Health endpoint returns 503 when unhealthy, but we still want to parse the response
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var response types.HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
 // doRequest performs an HTTP request
 func (c *Client) doRequest(method, path string, body io.Reader) (*http.Response, error) {
 	url := c.baseURL + path

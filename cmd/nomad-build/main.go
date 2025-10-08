@@ -37,6 +37,9 @@ COMMANDS:
     cleanup <job-id>                  Clean up resources for a job
     get-history [limit] [offset]      Get job history (default: 10 recent jobs)
 
+  Service Management:
+    health                            Check service health status
+
   Version Management:
     version-info                      Show current version and branch information
     version-major <major>             Set major version (resets minor and patch to 0)
@@ -133,6 +136,17 @@ repo_url: https://github.com/example/repo.git
 
     # Clean up job resources
     nomad-build cleanup abc123
+
+  Service Health:
+    # Check service health
+    nomad-build health
+    # Output:
+    #   ✅ Overall Status: healthy
+    #   Timestamp: 2025-10-08T12:34:56Z
+    #
+    #   Services:
+    #     ✅ nomad: healthy
+    #     ✅ consul: healthy
 
   Version Management:
     # Show current version and branch
@@ -232,6 +246,8 @@ func run(args []string) error {
 		return handleCleanup(c, commandArgs)
 	case "get-history":
 		return handleGetHistory(c, commandArgs)
+	case "health":
+		return handleHealth(c, commandArgs)
 	case "version-info":
 		return handleVersionInfo(commandArgs)
 	case "version-major":
@@ -517,6 +533,33 @@ func handleGetHistory(c *client.Client, args []string) error {
 	}
 
 	fmt.Println(string(output))
+	return nil
+}
+
+func handleHealth(c *client.Client, args []string) error {
+	response, err := c.Health()
+	if err != nil {
+		return fmt.Errorf("failed to get health: %w", err)
+	}
+
+	// Display health status with color-coded output
+	statusSymbol := "✅"
+	if response.Status != "healthy" {
+		statusSymbol = "❌"
+	}
+
+	fmt.Printf("%s Overall Status: %s\n", statusSymbol, response.Status)
+	fmt.Printf("Timestamp: %s\n\n", response.Timestamp)
+
+	fmt.Println("Services:")
+	for service, status := range response.Services {
+		serviceSymbol := "✅"
+		if status != "healthy" {
+			serviceSymbol = "❌"
+		}
+		fmt.Printf("  %s %s: %s\n", serviceSymbol, service, status)
+	}
+
 	return nil
 }
 
