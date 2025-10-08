@@ -14,7 +14,7 @@
 
 The current Nomad Build Service implements a lightweight, stateless server in Go for submitting Docker image build jobs to a Nomad cluster. It supports multiple MCP transport protocols (JSON-RPC over HTTP, streamable HTTP with chunked encoding, and SSE) for compatibility with different coding agents. However, the MCP protocol transports (SSE and Streamable HTTP) add unnecessary complexity without providing significant value over simple JSON-RPC.
 
-Additionally, the CLI tool currently only supports JSON job configurations, and managing build history and semantic versioning across multiple target repositories is cumbersome for coding agents.
+Additionally, managing build history and semantic versioning across multiple target repositories is cumbersome for coding agents.
 
 ### Goals
 
@@ -111,7 +111,7 @@ Additionally, the CLI tool currently only supports JSON job configurations, and 
 - ✅ Keep existing validation logic (no changes)
 
 **Existing Endpoints (Unchanged)**:
-- `submitJob`: Accept job configuration (JSON or YAML), return job ID
+- `submitJob`: Accept job configuration (JSON only), return job ID
 - `getStatus`: Query job status and metrics
 - `getLogs`: Retrieve phase-specific logs
 - `killJob`: Graceful job termination
@@ -122,7 +122,7 @@ Additionally, the CLI tool currently only supports JSON job configurations, and 
 #### FR2: CLI Tool YAML Configuration Support
 
 **Add YAML Configuration**:
-- CLI tool must accept YAML job configurations (in addition to or replacing JSON)
+- CLI tool must accept YAML job configurations only (no JSON support)
 - Support two configuration modes:
   1. **Single file**: Complete job config in one YAML file
   2. **Split files**: Global config (`deploy/global.yaml`) + per-build config (e.g., `build.yaml`)
@@ -395,7 +395,7 @@ phases:
 #### NFR1: Compatibility
 - Server changes must not affect core build orchestration
 - Existing JSON job configs should continue to work (server-side)
-- CLI should support both JSON and YAML (if JSON support retained)
+- CLI should support YAML only
 - All existing Nomad job templates remain compatible
 
 #### NFR2: Performance

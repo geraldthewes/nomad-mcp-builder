@@ -57,7 +57,7 @@ SUBMIT-JOB OPTIONS:
   --image-tags <tags>       Additional image tags to append (comma-separated)
                             Added to auto-generated version tag
 
-  If neither -global nor -config is specified, reads JSON or YAML from stdin or argument.
+  If neither -global nor -config is specified, reads YAML from stdin or argument.
 
 VERSION MANAGEMENT:
   The CLI automatically manages semantic versioning in deploy/version.yaml:
@@ -101,11 +101,13 @@ EXAMPLES:
     # With additional tags beyond auto-generated version tag
     nomad-build submit-job -config build.yaml --image-tags "latest,stable"
 
-    # From stdin (supports JSON or YAML)
+    # From stdin (YAML format)
     cat build.yaml | nomad-build submit-job
 
-    # Legacy: From JSON string argument
-    nomad-build submit-job '{"owner":"test","repo_url":"https://github.com/example/repo.git",...}'
+    # From YAML string argument
+    nomad-build submit-job 'owner: test
+repo_url: https://github.com/example/repo.git
+...'
 
   Query Jobs:
     # Get job status
@@ -290,7 +292,7 @@ func handleSubmitJob(c *client.Client, args []string) error {
 			perBuildConfigPath = args[i+1]
 			i += 2
 		} else if !strings.HasPrefix(arg, "-") {
-			// This is the config data (JSON or YAML string)
+			// This is the config data (YAML string)
 			configData = arg
 			break
 		} else {
@@ -309,7 +311,7 @@ func handleSubmitJob(c *client.Client, args []string) error {
 			return fmt.Errorf("failed to load YAML config: %w", err)
 		}
 	} else if configData != "" {
-		// Parse from command line argument (JSON or YAML)
+		// Parse from command line argument (YAML)
 		jobConfig, err = parseConfigData(configData)
 		if err != nil {
 			return fmt.Errorf("failed to parse config: %w", err)
@@ -383,18 +385,13 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	return nil
 }
 
-// parseConfigData attempts to parse config data as JSON first, then YAML
+// parseConfigData parses config data as YAML
 func parseConfigData(data string) (*types.JobConfig, error) {
 	var jobConfig types.JobConfig
 
-	// Try JSON first
-	if err := json.Unmarshal([]byte(data), &jobConfig); err == nil {
-		return &jobConfig, nil
-	}
-
-	// Try YAML
+	// Parse as YAML
 	if err := yaml.Unmarshal([]byte(data), &jobConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse as JSON or YAML: %w", err)
+		return nil, fmt.Errorf("failed to parse as YAML: %w", err)
 	}
 
 	return &jobConfig, nil
