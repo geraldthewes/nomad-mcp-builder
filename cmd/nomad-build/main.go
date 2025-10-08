@@ -11,13 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 	"nomad-mcp-builder/pkg/client"
 	"nomad-mcp-builder/pkg/config"
+	"nomad-mcp-builder/pkg/consul"
 	"nomad-mcp-builder/pkg/types"
-	"nomad-mcp-builder/pkg/version"
 )
 
 const (
 	defaultServiceURL = "http://localhost:8080"
-	defaultDeployDir  = "deploy"
 	usage = `nomad-build - CLI client for Nomad Build Service
 
 USAGE:
@@ -25,8 +24,7 @@ USAGE:
 
 DESCRIPTION:
   A command-line interface for the Nomad Build Service. Supports YAML
-  configuration files, automatic semantic versioning, and branch-aware
-  image tagging.
+  configuration files and simplified image tagging (defaults to job-id).
 
 COMMANDS:
   Job Management:
@@ -40,11 +38,6 @@ COMMANDS:
   Service Management:
     health                            Check service health status
 
-  Version Management:
-    version-info                      Show current version and branch information
-    version-major <major>             Set major version (resets minor and patch to 0)
-    version-minor <minor>             Set minor version (resets patch to 0)
-
 GLOBAL FLAGS:
   -h, --help                Show this help message
   -u, --url <url>           Service URL (default: http://localhost:8080)
@@ -57,24 +50,14 @@ SUBMIT-JOB OPTIONS:
   -config <file>            Per-build YAML configuration file (required for YAML mode)
                             Per-build values override global values
 
-  --image-tags <tags>       Additional image tags to append (comma-separated)
-                            Added to auto-generated version tag
+  --image-tags <tags>       Image tags to use (comma-separated)
+                            If not specified, defaults to job-id
+
+  -w, --watch               Watch job progress in real-time using Consul KV
+                            Displays status updates and exits when job completes
+                            Requires Consul connection (default: localhost:8500)
 
   If neither -global nor -config is specified, reads YAML from stdin or argument.
-
-VERSION MANAGEMENT:
-  The CLI automatically manages semantic versioning in deploy/version.yaml:
-
-  • Each 'submit-job' auto-increments the patch version
-  • Generates branch-aware tags: <branch>-v<MAJOR>.<MINOR>.<PATCH>
-  • Example: On branch 'feature-auth' with version 0.1.5
-             → tag: feature-auth-v0.1.5
-
-  Version file format (deploy/version.yaml):
-    version:
-      major: 0
-      minor: 1
-      patch: 5
 
 YAML CONFIGURATION:
   Global config (deploy/global.yaml) - Shared settings:
@@ -86,9 +69,6 @@ YAML CONFIGURATION:
 
   Per-build config (build.yaml) - Build-specific overrides:
     git_ref: feature/new-feature
-    image_tags:
-      - test
-      - dev
     test_entry_point: true
 
   See docs/JobSpec.md for complete configuration reference.
@@ -101,8 +81,11 @@ EXAMPLES:
     # With single YAML config (must include all required fields)
     nomad-build submit-job -config build.yaml
 
-    # With additional tags beyond auto-generated version tag
+    # With custom image tags (defaults to job-id if not specified)
     nomad-build submit-job -config build.yaml --image-tags "latest,stable"
+
+    # Watch job progress in real-time (recommended for interactive use)
+    nomad-build submit-job -config build.yaml --watch
 
     # From stdin (YAML format)
     cat build.yaml | nomad-build submit-job
@@ -150,28 +133,10 @@ repo_url: https://github.com/example/repo.git
     #     ✅ nomad: healthy
     #     ✅ consul: healthy
 
-  Version Management:
-    # Show current version and branch
-    nomad-build version-info
-    # Output:
-    #   Version: 0.1.5
-    #   Tag: v0.1.5
-    #   Branch: feature-new-feature
-    #   Branch Tag: feature-new-feature-v0.1.5
-
-    # Bump major version (creates v1.0.0)
-    nomad-build version-major 1
-
-    # Bump minor version (e.g., v0.2.0)
-    nomad-build version-minor 2
-
-    # Note: Patch version auto-increments on each submit-job
-
 ENVIRONMENT VARIABLES:
   NOMAD_BUILD_URL           Service URL (overrides default, can be overridden by -u flag)
 
 FILES:
-  deploy/version.yaml       Current version tracking
   deploy/global.yaml        Global configuration (optional)
   build.yaml                Per-build configuration
 
@@ -250,12 +215,6 @@ func run(args []string) error {
 		return handleGetHistory(c, commandArgs)
 	case "health":
 		return handleHealth(c, commandArgs)
-	case "version-info":
-		return handleVersionInfo(commandArgs)
-	case "version-major":
-		return handleVersionMajor(commandArgs)
-	case "version-minor":
-		return handleVersionMinor(commandArgs)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
@@ -274,11 +233,15 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	var globalConfigPath string
 	var perBuildConfigPath string
 	var configData string
+	var watch bool
 
 	i := 0
 	for i < len(args) {
 		arg := args[i]
-		if arg == "--image-tags" {
+		if arg == "--watch" || arg == "-w" {
+			watch = true
+			i++
+		} else if arg == "--image-tags" {
 			if i+1 >= len(args) {
 				return fmt.Errorf("flag %s requires a value", arg)
 			}
@@ -352,28 +315,8 @@ func handleSubmitJob(c *client.Client, args []string) error {
 		}
 	}
 
-	// Auto-increment patch version
-	v, err := version.IncrementPatch(defaultDeployDir)
-	if err != nil {
-		return fmt.Errorf("failed to increment version: %w", err)
-	}
-
-	// Get current branch for branch-aware tagging
-	branch, err := version.GetCurrentBranch()
-	if err != nil {
-		// If git fails, use simple version tag
-		fmt.Fprintf(os.Stderr, "Warning: Could not detect git branch: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Using version tag: %s\n", v.Tag())
-		jobConfig.ImageTags = append(jobConfig.ImageTags, v.Tag())
-	} else {
-		branchTag := v.BranchTag(branch)
-		fmt.Printf("Version: %s\n", v.String())
-		fmt.Printf("Branch: %s\n", branch)
-		fmt.Printf("Image tag: %s\n", branchTag)
-		jobConfig.ImageTags = append(jobConfig.ImageTags, branchTag)
-	}
-
-	// Merge additional image tags if provided
+	// Set image tags from --image-tags flag if provided
+	// If not provided, server will default to using job-id as the tag
 	if len(additionalImageTags) > 0 {
 		// Filter out empty tags
 		var validTags []string
@@ -383,7 +326,7 @@ func handleSubmitJob(c *client.Client, args []string) error {
 			}
 		}
 		if len(validTags) > 0 {
-			jobConfig.ImageTags = append(jobConfig.ImageTags, validTags...)
+			jobConfig.ImageTags = validTags
 		}
 	}
 
@@ -391,6 +334,11 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	response, err := c.SubmitJob(jobConfig)
 	if err != nil {
 		return fmt.Errorf("failed to submit job: %w", err)
+	}
+
+	// If --watch flag is set, watch the job progress instead of returning immediately
+	if watch {
+		return watchJobProgress(response.JobID, c.GetBaseURL())
 	}
 
 	// Output response
@@ -568,63 +516,100 @@ func handleHealth(c *client.Client, args []string) error {
 	return nil
 }
 
-func handleVersionInfo(args []string) error {
-	v, err := version.LoadVersion(defaultDeployDir)
+// watchJobProgress watches a job's progress in real-time using Consul KV
+func watchJobProgress(jobID string, serviceURL string) error {
+	fmt.Printf("Watching job: %s\n", jobID)
+	fmt.Printf("Service URL: %s\n\n", serviceURL)
+
+	// Create Consul client
+	consulClient, err := consul.NewClient("")
 	if err != nil {
-		return fmt.Errorf("failed to load version: %w", err)
+		fmt.Fprintf(os.Stderr, "Warning: Failed to create Consul client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Falling back to polling mode. Use 'nomad-build get-status %s' to check status manually.\n", jobID)
+		return fmt.Errorf("failed to create Consul client: %w", err)
 	}
 
-	branch, err := version.GetCurrentBranch()
-	if err != nil {
-		// If git fails, show version without branch info
-		fmt.Printf("Version: %s\n", v.String())
-		fmt.Printf("Tag: %s\n", v.Tag())
-		return nil
+	// Create channels for updates and errors
+	updates := make(chan consul.JobUpdate, 10)
+	errors := make(chan error, 10)
+
+	// Start watching in background
+	go consulClient.WatchJob(jobID, updates, errors)
+
+	var lastStatus types.JobStatus
+	var lastPhase string
+
+	// Process updates until job completes
+	for {
+		select {
+		case update, ok := <-updates:
+			if !ok {
+				// Channel closed, job finished
+				return nil
+			}
+
+			// Only print if status or phase changed
+			if update.Status != lastStatus || update.Phase != lastPhase {
+				timestamp := update.Timestamp.Format("15:04:05")
+
+				statusSymbol := getStatusSymbol(update.Status)
+				fmt.Printf("[%s] %s Status: %s", timestamp, statusSymbol, update.Status)
+
+				if update.Phase != "" {
+					fmt.Printf(" | Phase: %s", update.Phase)
+				}
+
+				if update.Error != "" {
+					fmt.Printf(" | Error: %s", update.Error)
+				}
+
+				fmt.Println()
+
+				lastStatus = update.Status
+				lastPhase = update.Phase
+			}
+
+			// Check if job reached terminal state
+			if update.Status == types.StatusSucceeded {
+				fmt.Printf("\n✅ Job completed successfully\n")
+				return nil
+			} else if update.Status == types.StatusFailed {
+				fmt.Printf("\n❌ Job failed")
+				if update.Error != "" {
+					fmt.Printf(": %s", update.Error)
+				}
+				fmt.Println()
+				return fmt.Errorf("job failed")
+			}
+
+		case err, ok := <-errors:
+			if !ok {
+				// Error channel closed
+				continue
+			}
+
+			// Log non-fatal errors but continue watching
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
 	}
-
-	branchTag := v.BranchTag(branch)
-	fmt.Printf("Version: %s\n", v.String())
-	fmt.Printf("Tag: %s\n", v.Tag())
-	fmt.Printf("Branch: %s\n", branch)
-	fmt.Printf("Branch Tag: %s\n", branchTag)
-
-	return nil
 }
 
-func handleVersionMajor(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("major version number required")
+// getStatusSymbol returns an emoji symbol for the given job status
+func getStatusSymbol(status types.JobStatus) string {
+	switch status {
+	case types.StatusPending:
+		return "⏳"
+	case types.StatusBuilding:
+		return "🔨"
+	case types.StatusTesting:
+		return "🧪"
+	case types.StatusPublishing:
+		return "📦"
+	case types.StatusSucceeded:
+		return "✅"
+	case types.StatusFailed:
+		return "❌"
+	default:
+		return "❓"
 	}
-
-	major, err := strconv.Atoi(args[0])
-	if err != nil {
-		return fmt.Errorf("invalid major version: %s", args[0])
-	}
-
-	v, err := version.SetMajor(defaultDeployDir, major)
-	if err != nil {
-		return fmt.Errorf("failed to set major version: %w", err)
-	}
-
-	fmt.Printf("Version updated to: %s\n", v.String())
-	return nil
-}
-
-func handleVersionMinor(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("minor version number required")
-	}
-
-	minor, err := strconv.Atoi(args[0])
-	if err != nil {
-		return fmt.Errorf("invalid minor version: %s", args[0])
-	}
-
-	v, err := version.SetMinor(defaultDeployDir, minor)
-	if err != nil {
-		return fmt.Errorf("failed to set minor version: %w", err)
-	}
-
-	fmt.Printf("Version updated to: %s\n", v.String())
-	return nil
 }

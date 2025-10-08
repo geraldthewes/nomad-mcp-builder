@@ -14,14 +14,14 @@
 
 The current Nomad Build Service implements a lightweight, stateless server in Go for submitting Docker image build jobs to a Nomad cluster. It supports multiple MCP transport protocols (JSON-RPC over HTTP, streamable HTTP with chunked encoding, and SSE) for compatibility with different coding agents. However, the MCP protocol transports (SSE and Streamable HTTP) add unnecessary complexity without providing significant value over simple JSON-RPC.
 
-Additionally, managing build history and semantic versioning across multiple target repositories is cumbersome for coding agents.
+Additionally, the CLI tool needs a simpler approach to image tagging that doesn't require complex version management.
 
 ### Goals
 
 - **Simplify server**: Remove MCP-specific transports (SSE, Streamable HTTP), keeping only JSON-RPC over HTTP for simpler agent integration
 - **Preserve core functionality**: Keep all existing server features (Prometheus metrics, Consul locking, graceful termination, webhooks, build history)
-- **Enhance CLI tool**: Add YAML configuration support, version management, and local build history tracking
-- **Improve agent experience**: Better documentation, clearer job specifications, easier version management
+- **Enhance CLI tool**: Add YAML configuration support and simplified image tagging
+- **Improve agent experience**: Better documentation, clearer job specifications, simplified tagging using job-id as default
 
 ### Non-Goals
 
@@ -49,12 +49,11 @@ Additionally, managing build history and semantic versioning across multiple tar
   - Intermediate image handling with `bdtemp-` naming
 
 **CLI Tool (Major Enhancements)**:
-- Add YAML configuration support (alongside or replacing JSON)
+- Add YAML configuration support (no JSON support)
 - Support global configuration file (`deploy/global.yaml`) + per-build override file
-- Manage semantic versioning with automatic patch incrementing
-- Use branch-aware tagging format: `branchname-vX.Y.Z`
-- Create and manage local `deploy/builds/` directory structure in target repo
-- Store build metadata, logs, and status locally for agent access
+- Simplified image tagging: use job-id as default tag, or specify custom tags via --image-tags flag
+- Optional: Create and manage local `deploy/builds/` directory structure in target repo for build history
+- Optional: Store build metadata, logs, and status locally for agent access
 - Invoked from within target repository directory
 
 **Documentation**:
@@ -191,65 +190,54 @@ nomad-build cleanup <job-id>
 - Validation happens on merged configuration
 - Clear error messages for missing required fields
 
-#### FR3: CLI Semantic Versioning Management
+#### FR3: CLI Simplified Image Tagging
 
-**Version Tracking**:
-- CLI manages semantic versioning for builds
-- Automatic patch-level incrementing on each build
-- Branch-aware tagging format: `<branchname>-v<MAJOR>.<MINOR>.<PATCH>`
+**Tagging Approach**:
+- Image tags can be specified via --image-tags flag (comma-separated list)
+- If --image-tags is not provided, the server uses job-id as the default tag
+- No semantic versioning or automatic version management required
 - Examples:
-  - `main-v1.2.3`
-  - `feature-auth-v0.1.5`
-  - `release-2.0-v2.0.12`
+  ```bash
+  # Use job-id as tag (default)
+  nomad-build submit-job -config build.yaml
+  # Result: image tagged as job-id (e.g., "abc123def456")
 
-**Version Commands**:
-```bash
-# Show current version for current branch
-nomad-build version-info
-
-# Manual version bumps (when requested by user)
-nomad-build version-major <version>  # e.g., main-v2.0.0
-nomad-build version-minor <version>  # e.g., main-v1.3.0
-
-# Automatic patch increment on submit
-nomad-build submit -config build.yaml  # Auto-increments patch
-```
-
-**Version Storage**:
-- Store current version in `deploy/version.yaml`:
-  ```yaml
-  versions:
-    main: v1.2.3
-    feature-auth: v0.1.5
-    release-2.0: v2.0.12
+  # Specify custom tags
+  nomad-build submit-job -config build.yaml --image-tags "latest,v1.0.0"
+  # Result: image tagged as "latest" and "v1.0.0"
   ```
 
-#### FR4: CLI Local Build History Management
+**Benefits**:
+- Eliminates need for version.yaml file
+- No branch detection or version tracking required
+- Simpler for users to understand and use
+- Tags are explicit and traceable via job-id
 
-**Deploy Directory Structure** (CLI creates and manages in target repo):
+#### FR4: CLI Local Build History Management (Optional)
+
+**Note**: This feature is optional and can be implemented in a future iteration if needed.
+
+**Deploy Directory Structure** (CLI could optionally create and manage in target repo):
 ```
 deploy/
 ├── global.yaml              # Global configuration
-├── version.yaml             # Version tracking per branch
 ├── builds/                  # Per-build history
-│   ├── main-v1.2.3/
+│   ├── job-abc123/
 │   │   ├── status.md        # Summary: phases, status, duration
-│   │   ├── metadata.yaml    # Job config, timestamps, version, branch
+│   │   ├── metadata.yaml    # Job config, timestamps, job-id
 │   │   ├── build.log        # Build phase logs (stdout + stderr)
 │   │   ├── test.log         # Test phase logs (if applicable)
 │   │   └── deploy.log       # Deploy phase logs (if applicable)
-│   ├── main-v1.2.4/
+│   ├── job-def456/
 │   │   └── ...
-│   └── feature-auth-v0.1.5/
-│       └── ...
 └── history.md               # Chronological summary of all builds
 ```
 
 **File Formats**:
 
-**`deploy/builds/<version>/status.md`**:
+**`deploy/builds/<job-id>/status.md`**:
 ```markdown
-# Build Status: main-v1.2.3
+# Build Status: job-abc123def456
 
 **Status**: SUCCESS
 **Started**: 2025-10-07T14:23:45Z
@@ -263,13 +251,11 @@ deploy/
 
 ## Image
 - Registry: registry.cluster:5000/myapp
-- Tags: main-v1.2.3, latest
+- Tags: abc123def456 (job-id), latest (custom)
 ```
 
-**`deploy/builds/<version>/metadata.yaml`**:
+**`deploy/builds/<job-id>/metadata.yaml`**:
 ```yaml
-version: main-v1.2.3
-branch: main
 job_id: build-abc123def456
 started_at: 2025-10-07T14:23:45Z
 completed_at: 2025-10-07T14:28:12Z
@@ -280,7 +266,6 @@ job_config:
   # Full merged job configuration
   target:
     image_name: my-service
-    image_tag: v1.2.3
   # ... rest of config
 phases:
   build:
@@ -304,22 +289,24 @@ phases:
 ```markdown
 # Build History
 
-## main-v1.2.4 (2025-10-07 15:30:12 UTC)
+## job-def456ghi789 (2025-10-07 15:30:12 UTC)
 **Status**: SUCCESS | **Duration**: 4m12s | **Purpose**: Add retry logic
+**Tags**: def456ghi789, latest
 
-## main-v1.2.3 (2025-10-07 14:28:12 UTC)
+## job-abc123def456 (2025-10-07 14:28:12 UTC)
 **Status**: SUCCESS | **Duration**: 4m27s | **Purpose**: Fix authentication bug
+**Tags**: abc123def456, v1.0.0
 
-## main-v1.2.2 (2025-10-07 10:15:33 UTC)
+## job-xyz789abc012 (2025-10-07 10:15:33 UTC)
 **Status**: FAILED | **Duration**: 3m05s | **Purpose**: Update dependencies
 **Error**: Build phase failed - compilation error in auth.go
 ```
 
-**CLI Behavior**:
-- After job submission, CLI polls server for status and logs
-- Upon completion (success or failure), writes results to `deploy/builds/<version>/`
-- Appends entry to `deploy/history.md`
-- Stores complete logs for each phase in separate `.log` files
+**CLI Behavior** (if implemented):
+- After job submission, CLI could optionally poll server for status and logs
+- Upon completion (success or failure), could write results to `deploy/builds/<job-id>/`
+- Could append entry to `deploy/history.md`
+- Could store complete logs for each phase in separate `.log` files
 
 #### FR5: Documentation Updates
 
@@ -442,17 +429,8 @@ phases:
 5. Add tests for YAML parsing and merging
 6. Update CLI documentation
 
-### Phase 3: CLI Version Management
-1. Implement version tracking in `deploy/version.yaml`
-2. Add automatic patch incrementing
-3. Implement `version-info`, `version-major`, `version-minor` commands
-4. Add branch detection from git
-5. Generate branch-aware tags (`branchname-vX.Y.Z`)
-6. Add tests for version management
-7. Update documentation
-
-### Phase 4: CLI Build History
-1. Implement `deploy/builds/<version>/` directory creation
+### Phase 3: CLI Build History (Optional - Future Enhancement)
+1. Implement `deploy/builds/<job-id>/` directory creation
 2. Poll server for job status and logs after submission
 3. Write `status.md`, `metadata.yaml`, and phase logs
 4. Implement `history.md` appending
@@ -460,19 +438,19 @@ phases:
 6. Add tests for history management
 7. Update documentation
 
-### Phase 5: Documentation
+### Phase 4: Documentation
 1. Create comprehensive `JobSpec.md`
 2. Create `command.md` or enhance `--help`
 3. Update `README.md`
 4. Update `CLAUDE.md`
 5. Review all documentation for consistency
 
-### Phase 6: Testing and Validation
+### Phase 5: Testing and Validation
 1. Run all unit tests
 2. Run integration tests against deployed server
 3. Manual end-to-end test with CLI
-4. Verify build history files created correctly
-5. Verify version tracking works across branches
+4. Verify --image-tags flag works correctly
+5. Verify job-id default tagging works
 6. Verify YAML configuration merging works as expected
 
 ## Success Metrics
@@ -481,11 +459,10 @@ phases:
 - ✅ All existing server features functional (metrics, locking, graceful termination, webhooks)
 - ✅ CLI accepts YAML configurations (single and split file modes)
 - ✅ Configuration merging works correctly (per-build overrides global)
-- ✅ Version tracking functional with automatic patch incrementing
-- ✅ Build history files created and populated correctly
+- ✅ Simplified image tagging works (job-id default, --image-tags flag)
 - ✅ All tests pass (unit and integration)
 - ✅ Documentation complete and accurate
-- ✅ End-to-end CLI workflow successful (submit → poll → write history)
+- ✅ End-to-end CLI workflow successful (submit → tag with job-id or custom tags)
 
 ## Risks and Mitigations
 
@@ -493,9 +470,8 @@ phases:
 |------|------------|
 | Breaking existing integrations | No backward compatibility required; clean break acceptable |
 | YAML parsing errors | Robust validation with clear error messages; comprehensive testing |
-| Version file corruption | Atomic writes; reset with warning on corruption |
-| Build history disk usage | Document history cleanup best practices; could add automatic rotation later |
-| CLI polling overhead | Reasonable polling intervals (1-2 seconds); timeout after reasonable duration |
+| Image tag conflicts | Job-id ensures uniqueness; custom tags are user's responsibility |
+| CLI polling overhead (if build history feature implemented) | Reasonable polling intervals (1-2 seconds); timeout after reasonable duration |
 
 ## Appendices
 
@@ -536,11 +512,8 @@ deploy:
 meta:
   purpose: "Add S3 unified path support"
 
-target:
-  image_tag: v4.0.1  # Overrides version (or auto-incremented)
-
 build:
-  git_ref: feature/s3-unified-paths  # Overrides branch
+  git_ref: feature/s3-unified-paths
 
 test:
   test: true
@@ -549,6 +522,8 @@ test:
 webhooks_url: https://my-webhook.example.com/notify
 ```
 
+**Note**: Image tags are specified via CLI `--image-tags` flag, not in YAML config.
+
 **Merged Configuration** (what gets sent to server):
 ```yaml
 meta:
@@ -556,7 +531,6 @@ meta:
 
 target:
   image_name: video-transcription-batch
-  image_tag: v4.0.1
 
 registry_url: registry.cluster:5000/myapp
 registry_credentials_path: secret/nomad/jobs/registry-credentials

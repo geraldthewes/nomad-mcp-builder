@@ -82,9 +82,9 @@ The `nomad-build` CLI tool provides a user-friendly interface to the build servi
 
 **Key Features:**
 - **YAML Configuration**: Support for both single-file and split-file (global + per-build) configurations
-- **Semantic Versioning**: Automatic patch-level incrementing on each build
-- **Branch-Aware Tagging**: Generates tags in format `<branchname>-vX.Y.Z`
-- **Version Management**: Commands to view and manage versions
+- **Simplified Image Tagging**: Uses job-id as default tag, or specify custom tags with `--image-tags`
+- **Real-time Job Watching**: Watch job progress in real-time using Consul KV (push-based, no polling)
+- **Webhook Support**: Service-level webhooks for external integrations (CI/CD, Slack, etc.)
 
 **CLI Commands:**
 ```bash
@@ -93,7 +93,16 @@ nomad-build submit-job -config build.yaml
 nomad-build submit-job -global deploy/global.yaml -config build.yaml
 nomad-build submit-job --image-tags "v1.0.0,latest" -config build.yaml
 
-# Query job status and logs
+# Submit and watch progress in real-time (recommended for interactive use)
+nomad-build submit-job -config build.yaml --watch
+# Output example:
+#   Watching job: abc123def456
+#   [12:34:56] 🔨 Status: BUILDING | Phase: build
+#   [12:35:42] 🧪 Status: TESTING | Phase: test
+#   [12:36:15] 📦 Status: PUBLISHING | Phase: publish
+#   ✅ Job completed successfully
+
+# Query job status and logs (polling mode)
 nomad-build get-status <job-id>
 nomad-build get-logs <job-id> [phase]
 
@@ -102,10 +111,8 @@ nomad-build kill-job <job-id>
 nomad-build cleanup <job-id>
 nomad-build get-history [limit] [offset]
 
-# Version management
-nomad-build version-info           # Show current version and branch
-nomad-build version-major <ver>    # Set major version
-nomad-build version-minor <ver>    # Set minor version
+# Service health
+nomad-build health
 ```
 
 **YAML Configuration:**
@@ -114,11 +121,19 @@ The CLI supports YAML job configurations with deep merge capability:
 - **Per-build config** (e.g., `build.yaml`): Build-specific overrides
 - Per-build values override global values for any non-zero field
 
-**Version Tracking:**
-- Stored in `deploy/version.yaml`
-- Auto-increments patch version on each `submit-job` command
-- Uses current git branch for branch-aware tags
-- Example: On branch `feature-auth` with version `0.1.5`, image tagged as `feature-auth-v0.1.5`
+**Job Progress Monitoring:**
+Two approaches for monitoring job progress:
+1. **Consul KV Watching (CLI)**: Use `--watch` flag for real-time push-based updates via Consul blocking queries
+   - Efficient, no polling overhead
+   - Displays live status updates with timestamps and emojis
+   - Exits automatically when job completes or fails
+   - Requires Consul connection (default: localhost:8500)
+
+2. **Webhooks (External Integrations)**: Configure webhooks in YAML for external systems
+   - Supports phase-level events (build/test/publish started/completed/failed)
+   - HMAC-SHA256 signature authentication
+   - Retry logic with 3 attempts
+   - Custom headers and success/failure filtering
 
 ## Development Workflow
 

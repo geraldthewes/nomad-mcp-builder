@@ -77,7 +77,7 @@ A build submission request from the agent could look like this:
 
   "dockerfile_path": "Dockerfile",
 
-  "image_tags": ["latest", "1.2.3"],
+  "image_tags": ["latest", "1.2.3"],  // Optional: defaults to job-id if not provided
 
   "registry_url": "docker.io/my-org/my-app",
 
@@ -194,16 +194,19 @@ A build submission request from the agent could look like this:
 
 * **Go Client Library:** A reusable Go client library (`pkg/client`) that wraps all service functionality, providing programmatic access to the build service API from Go applications.
 * **CLI Binary:** A standalone command-line tool (`nomad-build`) that provides complete access to all service functionality through a user-friendly interface.
-* **Dual Input Support:** The CLI must support JSON job configurations from both command-line arguments and stdin, enabling flexible integration with scripts and automation tools.
+* **YAML Configuration Support:** The CLI supports YAML job configurations from files, command-line arguments, and stdin, enabling flexible integration with scripts and automation tools.
+* **Simplified Image Tagging:** Image tags can be specified via `--image-tags` flag. If not provided, the job-id is used as the default tag, eliminating the need for complex version management.
 * **Service Discovery Integration:** Automatic integration with Consul service discovery to locate the build service without hardcoding addresses.
 * **Environment Configuration:** Support for service URL configuration via `NOMAD_BUILD_URL` environment variable for CI/CD pipeline integration.
+* **Real-time Job Watching:** The CLI supports real-time job progress monitoring via Consul KV using blocking queries (push-based updates) with the `--watch` flag, eliminating the need for polling and providing instant status updates.
 * **Complete Feature Parity:** The CLI must provide access to all functionality including:
-  * `submit-job` - Submit build jobs with JSON configuration
+  * `submit-job` - Submit build jobs with YAML configuration, optional --image-tags flag, and --watch flag for real-time progress
   * `get-status` - Query job status with detailed metrics
   * `get-logs` - Retrieve logs for all phases (build, test, publish) with optional phase filtering
   * `kill-job` - Terminate running jobs gracefully
   * `cleanup` - Clean up job resources and temporary artifacts
   * `get-history` - Retrieve job history with pagination support
+  * `health` - Check service health status
 * **Automation Friendly:** Structured JSON output for all commands to enable easy parsing by scripts and monitoring tools.
 * **Error Handling:** Comprehensive error messages with HTTP status codes and detailed error descriptions from the service.
 * **Documentation Integration:** Complete usage examples including CI/CD pipeline integration, monitoring scripts, and Go library usage patterns.
@@ -216,16 +219,36 @@ The CLI tool provides the following command structure:
 nomad-build [flags] <command> [args...]
 
 Commands:
-  submit-job <json>         Submit build job (JSON from argument or stdin)
+  submit-job [options]      Submit build job with YAML configuration
+    -global <file>          Global YAML configuration file (optional)
+    -config <file>          Per-build YAML configuration file
+    --image-tags <tags>     Image tags (comma-separated, defaults to job-id)
+    -w, --watch             Watch job progress in real-time using Consul KV
+
   get-status <job-id>       Get job status and metrics
   get-logs <job-id> [phase] Get logs (all phases or specific: build, test, publish)
   kill-job <job-id>         Terminate running job
   cleanup <job-id>          Clean up job resources
   get-history [limit] [offset] Get job history with pagination
+  health                    Check service health status
 
 Flags:
   -h, --help               Show help message
   -u, --url <url>          Service URL (overrides NOMAD_BUILD_URL)
+
+Job Monitoring:
+  The CLI supports two approaches for monitoring job progress:
+
+  1. Watch Mode (--watch): Real-time push-based updates via Consul KV blocking queries
+     - Efficient, no polling overhead
+     - Displays live status updates with timestamps
+     - Exits automatically when job completes or fails
+     - Example: nomad-build submit-job -config build.yaml --watch
+
+  2. Polling Mode: Manual status queries using get-status command
+     - Useful for scripting and automation
+     - Provides detailed JSON output
+     - Example: nomad-build get-status <job-id>
 ```
 
 #### FR11.2: Integration Requirements
