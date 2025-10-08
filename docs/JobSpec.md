@@ -240,7 +240,7 @@ webhook_url: https://hooks.slack.com/services/T00/B00/XXX
 
 **Usage**:
 ```bash
-nomad-build submit-job -global deploy/global.yaml -config build.yaml
+jobforge submit-job -global deploy/global.yaml -config build.yaml
 ```
 
 **Result**: The CLI merges these configs, with `build.yaml` values overriding `global.yaml`, and automatically adds a branch-aware version tag.
@@ -313,7 +313,7 @@ The CLI automatically:
 # Current branch: feature-auth
 # Your build.yaml specifies: image_tags: ["test"]
 
-nomad-build submit-job -config build.yaml
+jobforge submit-job -config build.yaml
 
 # Actual tags sent to server:
 # - "test" (from build.yaml)
@@ -326,7 +326,7 @@ nomad-build submit-job -config build.yaml
 You can add more tags using `--image-tags`:
 
 ```bash
-nomad-build submit-job -config build.yaml --image-tags "latest,stable"
+jobforge submit-job -config build.yaml --image-tags "latest,stable"
 
 # Final tags:
 # - Tags from build.yaml
@@ -381,7 +381,7 @@ curl -X POST http://localhost:8080/json/submitJob \
 
 ```bash
 # Create build.yaml with the configuration
-nomad-build submit-job -config build.yaml
+jobforge submit-job -config build.yaml
 ```
 
 ## Build Phases

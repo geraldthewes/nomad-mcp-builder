@@ -185,7 +185,7 @@ A build submission request from the agent could look like this:
 
 #### FR10: Build History (Optional)
 
-* **Record Keeping:** Maintain last 50 build records in Consul KV at `nomad-build-service/history/<job-id>`.
+* **Record Keeping:** Maintain last 50 build records in Consul KV at `jobforge-service/history/<job-id>`.
 * **Data Stored:** Job config, status, duration, basic metrics.
 * **Access:** Available via `getHistory` endpoint for debugging.
 * **Cleanup:** Automatic removal of records older than 30 days.
@@ -193,11 +193,11 @@ A build submission request from the agent could look like this:
 #### FR11: Command Line Interface (CLI) Tool
 
 * **Go Client Library:** A reusable Go client library (`pkg/client`) that wraps all service functionality, providing programmatic access to the build service API from Go applications.
-* **CLI Binary:** A standalone command-line tool (`nomad-build`) that provides complete access to all service functionality through a user-friendly interface.
+* **CLI Binary:** A standalone command-line tool (`jobforge`) that provides complete access to all service functionality through a user-friendly interface.
 * **YAML Configuration Support:** The CLI supports YAML job configurations from files, command-line arguments, and stdin, enabling flexible integration with scripts and automation tools.
 * **Simplified Image Tagging:** Image tags can be specified via `--image-tags` flag. If not provided, the job-id is used as the default tag, eliminating the need for complex version management.
 * **Service Discovery Integration:** Automatic integration with Consul service discovery to locate the build service without hardcoding addresses.
-* **Environment Configuration:** Support for service URL configuration via `NOMAD_BUILD_URL` environment variable for CI/CD pipeline integration.
+* **Environment Configuration:** Support for service URL configuration via `JOB_SERVICE_URL` environment variable for CI/CD pipeline integration.
 * **Real-time Job Watching:** The CLI supports real-time job progress monitoring via Consul KV using blocking queries (push-based updates) with the `--watch` flag, eliminating the need for polling and providing instant status updates.
 * **Complete Feature Parity:** The CLI must provide access to all functionality including:
   * `submit-job` - Submit build jobs with YAML configuration, optional --image-tags flag, and --watch flag for real-time progress
@@ -216,7 +216,7 @@ A build submission request from the agent could look like this:
 The CLI tool provides the following command structure:
 
 ```
-nomad-build [flags] <command> [args...]
+jobforge [flags] <command> [args...]
 
 Commands:
   submit-job [options]      Submit build job with YAML configuration
@@ -234,7 +234,7 @@ Commands:
 
 Flags:
   -h, --help               Show help message
-  -u, --url <url>          Service URL (overrides NOMAD_BUILD_URL)
+  -u, --url <url>          Service URL (overrides JOB_SERVICE_URL)
 
 Job Monitoring:
   The CLI supports two approaches for monitoring job progress:
@@ -243,12 +243,12 @@ Job Monitoring:
      - Efficient, no polling overhead
      - Displays live status updates with timestamps
      - Exits automatically when job completes or fails
-     - Example: nomad-build submit-job -config build.yaml --watch
+     - Example: jobforge submit-job -config build.yaml --watch
 
   2. Polling Mode: Manual status queries using get-status command
      - Useful for scripting and automation
      - Provides detailed JSON output
-     - Example: nomad-build get-status <job-id>
+     - Example: jobforge get-status <job-id>
 ```
 
 #### FR11.2: Integration Requirements
@@ -318,7 +318,7 @@ Job Monitoring:
 
 #### NFR8: Configuration Management
 
-* **Service Configuration:** Via Consul KV store at `nomad-build-service/config/`
+* **Service Configuration:** Via Consul KV store at `jobforge-service/config/`
 * **Secrets Management:** Exclusively via Vault at paths like `nomad/jobs/<service>-secrets`  
 * **Environment Injection:** Support consul-template pattern for dynamic configuration
 * **Configuration Keys:**

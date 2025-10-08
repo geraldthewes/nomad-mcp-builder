@@ -17,13 +17,13 @@ import (
 
 const (
 	defaultServiceURL = "http://localhost:8080"
-	usage = `nomad-build - CLI client for Nomad Build Service
+	usage = `jobforge - CLI client for JobForge Build Service
 
 USAGE:
-  nomad-build [global-flags] <command> [command-args...]
+  jobforge [global-flags] <command> [command-args...]
 
 DESCRIPTION:
-  A command-line interface for the Nomad Build Service. Supports YAML
+  A command-line interface for the JobForge Build Service. Supports YAML
   configuration files and simplified image tagging (defaults to job-id).
 
 COMMANDS:
@@ -41,7 +41,7 @@ COMMANDS:
 GLOBAL FLAGS:
   -h, --help                Show this help message
   -u, --url <url>           Service URL (default: http://localhost:8080)
-                            Can also be set via NOMAD_BUILD_URL environment variable
+                            Can also be set via JOB_SERVICE_URL environment variable
 
 SUBMIT-JOB OPTIONS:
   -global <file>            Global YAML configuration file (optional)
@@ -76,53 +76,53 @@ YAML CONFIGURATION:
 EXAMPLES:
   Submit Jobs:
     # With global + per-build YAML configs (recommended)
-    nomad-build submit-job -global deploy/global.yaml -config build.yaml
+    jobforge submit-job -global deploy/global.yaml -config build.yaml
 
     # With single YAML config (must include all required fields)
-    nomad-build submit-job -config build.yaml
+    jobforge submit-job -config build.yaml
 
     # With custom image tags (defaults to job-id if not specified)
-    nomad-build submit-job -config build.yaml --image-tags "latest,stable"
+    jobforge submit-job -config build.yaml --image-tags "latest,stable"
 
     # Watch job progress in real-time (recommended for interactive use)
-    nomad-build submit-job -config build.yaml --watch
+    jobforge submit-job -config build.yaml --watch
 
     # From stdin (YAML format)
-    cat build.yaml | nomad-build submit-job
+    cat build.yaml | jobforge submit-job
 
     # From YAML string argument
-    nomad-build submit-job 'owner: test
+    jobforge submit-job 'owner: test
 repo_url: https://github.com/example/repo.git
 ...'
 
   Query Jobs:
     # Get job status
-    nomad-build get-status abc123
+    jobforge get-status abc123
 
     # Get all logs
-    nomad-build get-logs abc123
+    jobforge get-logs abc123
 
     # Get phase-specific logs
-    nomad-build get-logs abc123 build
-    nomad-build get-logs abc123 test
-    nomad-build get-logs abc123 publish
+    jobforge get-logs abc123 build
+    jobforge get-logs abc123 test
+    jobforge get-logs abc123 publish
 
     # Get job history (last 20 jobs)
-    nomad-build get-history 20
+    jobforge get-history 20
 
     # Get job history with pagination
-    nomad-build get-history 10 20  # limit=10, offset=20
+    jobforge get-history 10 20  # limit=10, offset=20
 
   Manage Jobs:
     # Kill a running job
-    nomad-build kill-job abc123
+    jobforge kill-job abc123
 
     # Clean up job resources
-    nomad-build cleanup abc123
+    jobforge cleanup abc123
 
   Service Health:
     # Check service health
-    nomad-build health
+    jobforge health
     # Output:
     #   Service URL: http://10.0.1.16:21654
     #
@@ -134,7 +134,7 @@ repo_url: https://github.com/example/repo.git
     #     ✅ consul: healthy
 
 ENVIRONMENT VARIABLES:
-  NOMAD_BUILD_URL           Service URL (overrides default, can be overridden by -u flag)
+  JOB_SERVICE_URL           Service URL (overrides default, can be overridden by -u flag)
 
 FILES:
   deploy/global.yaml        Global configuration (optional)
@@ -221,7 +221,7 @@ func run(args []string) error {
 }
 
 func getServiceURL() string {
-	if url := os.Getenv("NOMAD_BUILD_URL"); url != "" {
+	if url := os.Getenv("JOB_SERVICE_URL"); url != "" {
 		return url
 	}
 	return defaultServiceURL
@@ -525,7 +525,7 @@ func watchJobProgress(jobID string, serviceURL string) error {
 	consulClient, err := consul.NewClient("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to create Consul client: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Falling back to polling mode. Use 'nomad-build get-status %s' to check status manually.\n", jobID)
+		fmt.Fprintf(os.Stderr, "Falling back to polling mode. Use 'jobforge get-status %s' to check status manually.\n", jobID)
 		return fmt.Errorf("failed to create Consul client: %w", err)
 	}
 

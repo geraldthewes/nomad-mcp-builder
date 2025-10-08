@@ -11,7 +11,7 @@ import (
 	"nomad-mcp-builder/pkg/types"
 )
 
-// Client represents a client for the nomad-build service
+// Client represents a client for the jobforge service
 type Client struct {
 	baseURL    string
 	httpClient *http.Client

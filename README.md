@@ -53,31 +53,31 @@ The service provides two ways to interact with it:
 
 ### 1. CLI Tool (Recommended)
 
-The `nomad-build` CLI tool provides the easiest way to interact with the build service:
+The `jobforge` CLI tool provides the easiest way to interact with the build service:
 
 ```bash
 # Submit a build job with YAML configuration
-nomad-build submit-job -config build.yaml
+jobforge submit-job -config build.yaml
 
 # Submit with global config + per-build override
-nomad-build submit-job -global deploy/global.yaml -config build.yaml
+jobforge submit-job -global deploy/global.yaml -config build.yaml
 
 # Add additional image tags
-nomad-build submit-job -config build.yaml --image-tags "v1.0.0,latest"
+jobforge submit-job -config build.yaml --image-tags "v1.0.0,latest"
 
 # Query job status and logs
-nomad-build get-status <job-id>
-nomad-build get-logs <job-id> [phase]
+jobforge get-status <job-id>
+jobforge get-logs <job-id> [phase]
 
 # Job management
-nomad-build kill-job <job-id>
-nomad-build cleanup <job-id>
-nomad-build get-history [limit] [offset]
+jobforge kill-job <job-id>
+jobforge cleanup <job-id>
+jobforge get-history [limit] [offset]
 
 # Version management
-nomad-build version-info           # Show current version and branch
-nomad-build version-major <ver>    # Set major version (resets minor/patch to 0)
-nomad-build version-minor <ver>    # Set minor version (resets patch to 0)
+jobforge version-info           # Show current version and branch
+jobforge version-major <ver>    # Set major version (resets minor/patch to 0)
+jobforge version-minor <ver>    # Set minor version (resets patch to 0)
 ```
 
 **Key Features:**
@@ -166,7 +166,7 @@ curl http://localhost:8080/health
    git clone <repository-url>
    cd nomad-mcp-builder
    go mod tidy
-   go build -o nomad-build-service ./cmd/server
+   go build -o jobforge-service ./cmd/server
    ```
 
 2. **Configuration**
@@ -202,7 +202,7 @@ curl http://localhost:8080/health
 
 3. **Run the Service**
    ```bash
-   ./nomad-build-service
+   ./jobforge-service
    ```
 
 ## Configuration
@@ -247,13 +247,13 @@ test_entry_point: true
 
 ```bash
 # With both global and per-build configs
-nomad-build submit-job -global deploy/global.yaml -config build.yaml
+jobforge submit-job -global deploy/global.yaml -config build.yaml
 
 # With only per-build config (must include all required fields)
-nomad-build submit-job -config build.yaml
+jobforge submit-job -config build.yaml
 
 # Add extra tags in addition to auto-generated version tag
-nomad-build submit-job -config build.yaml --image-tags "latest,stable"
+jobforge submit-job -config build.yaml --image-tags "latest,stable"
 ```
 
 #### Version Management
@@ -269,7 +269,7 @@ The CLI automatically manages semantic versioning:
 #   patch: 5
 
 # View current version
-nomad-build version-info
+jobforge version-info
 # Output:
 #   Version: 0.1.5
 #   Tag: v0.1.5
@@ -277,8 +277,8 @@ nomad-build version-info
 #   Branch Tag: feature-new-feature-v0.1.5
 
 # Manual version bumps
-nomad-build version-major 1  # Sets version to 1.0.0
-nomad-build version-minor 2  # Sets version to 0.2.0
+jobforge version-major 1  # Sets version to 1.0.0
+jobforge version-minor 2  # Sets version to 0.2.0
 
 # Auto-increment on submit
 # Each 'submit-job' automatically increments patch version
@@ -310,14 +310,14 @@ nomad-build version-minor 2  # Sets version to 0.2.0
 
 ### Consul Configuration
 
-The service stores configuration in Consul KV at `nomad-build-service/config/`:
+The service stores configuration in Consul KV at `jobforge-service/config/`:
 
 ```bash
-consul kv put nomad-build-service/config/build_timeout "45m"
-consul kv put nomad-build-service/config/test_timeout "20m"
-consul kv put nomad-build-service/config/default_resource_limits/cpu "1000"
-consul kv put nomad-build-service/config/default_resource_limits/memory "2048"
-consul kv put nomad-build-service/config/default_resource_limits/disk "10240"
+consul kv put jobforge-service/config/build_timeout "45m"
+consul kv put jobforge-service/config/test_timeout "20m"
+consul kv put jobforge-service/config/default_resource_limits/cpu "1000"
+consul kv put jobforge-service/config/default_resource_limits/memory "2048"
+consul kv put jobforge-service/config/default_resource_limits/disk "10240"
 ```
 
 ### Vault Secrets
@@ -404,22 +404,22 @@ plugin "docker" {
 
 ## Command Line Tool
 
-The project includes a `nomad-build` CLI tool that provides the same functionality as the web API in a convenient command-line interface.
+The project includes a `jobforge` CLI tool that provides the same functionality as the web API in a convenient command-line interface.
 
 ### Building the CLI Tool
 
 ```bash
 # Build the CLI tool
-go build -o nomad-build ./cmd/nomad-build
+go build -o jobforge ./cmd/jobforge
 ```
 
 ### CLI Usage
 
 ```
-nomad-build - CLI client for nomad build service
+jobforge - CLI client for nomad build service
 
 Usage:
-  nomad-build [flags] <command> [args...]
+  jobforge [flags] <command> [args...]
 
 Commands:
   submit-job <json>     Submit a new build job (JSON from arg or stdin)
@@ -432,7 +432,7 @@ Commands:
 Flags:
   -h, --help           Show this help message
   -u, --url <url>      Service URL (default: http://localhost:8080)
-                       Can also be set via NOMAD_BUILD_URL environment variable
+                       Can also be set via JOB_SERVICE_URL environment variable
 ```
 
 ### CLI Examples
@@ -441,7 +441,7 @@ Flags:
 
 **From command line argument:**
 ```bash
-nomad-build submit-job '{
+jobforge submit-job '{
   "owner": "myorg",
   "repo_url": "https://github.com/myorg/myapp.git",
   "git_ref": "main",
@@ -463,55 +463,55 @@ echo '{
   "image_name": "myapp",
   "image_tags": ["v1.0"],
   "registry_url": "registry.cluster:5000/myapp"
-}' | nomad-build submit-job
+}' | jobforge submit-job
 ```
 
 **From file:**
 ```bash
-cat job-config.json | nomad-build submit-job
+cat job-config.json | jobforge submit-job
 ```
 
 #### Check Job Status
 
 ```bash
-nomad-build get-status abc123-def456-789
+jobforge get-status abc123-def456-789
 ```
 
 #### Get Job Logs
 
 ```bash
 # Get all logs
-nomad-build get-logs abc123-def456-789
+jobforge get-logs abc123-def456-789
 
 # Get logs for specific phase
-nomad-build get-logs abc123-def456-789 build
-nomad-build get-logs abc123-def456-789 test
-nomad-build get-logs abc123-def456-789 publish
+jobforge get-logs abc123-def456-789 build
+jobforge get-logs abc123-def456-789 test
+jobforge get-logs abc123-def456-789 publish
 ```
 
 #### Kill a Running Job
 
 ```bash
-nomad-build kill-job abc123-def456-789
+jobforge kill-job abc123-def456-789
 ```
 
 #### Clean Up Job Resources
 
 ```bash
-nomad-build cleanup abc123-def456-789
+jobforge cleanup abc123-def456-789
 ```
 
 #### Get Job History
 
 ```bash
 # Get last 10 jobs
-nomad-build get-history
+jobforge get-history
 
 # Get specific number of jobs
-nomad-build get-history 20
+jobforge get-history 20
 
 # Get jobs with offset (pagination)
-nomad-build get-history 10 20
+jobforge get-history 10 20
 ```
 
 ### Service Discovery Integration
@@ -520,14 +520,14 @@ The CLI tool automatically works with service discovery:
 
 ```bash
 # Using Consul service discovery
-consul catalog service nomad-build-service
+consul catalog service jobforge-service
 # Service Address: 10.0.1.13:21855
 
 # Set environment variable for convenience
-export NOMAD_BUILD_URL=http://10.0.1.13:21855
+export JOB_SERVICE_URL=http://10.0.1.13:21855
 
 # Now all CLI commands will use the discovered service
-nomad-build get-history
+jobforge get-history
 ```
 
 ### CLI Integration Examples
@@ -539,15 +539,15 @@ nomad-build get-history
 # Build and deploy script
 
 # Set service URL from environment
-export NOMAD_BUILD_URL=${BUILD_SERVICE_URL}
+export JOB_SERVICE_URL=${BUILD_SERVICE_URL}
 
 # Submit job from JSON file
-JOB_ID=$(cat build-config.json | nomad-build submit-job | jq -r '.job_id')
+JOB_ID=$(cat build-config.json | jobforge submit-job | jq -r '.job_id')
 echo "Build job submitted: $JOB_ID"
 
 # Wait for completion
 while true; do
-  STATUS=$(nomad-build get-status $JOB_ID | jq -r '.status')
+  STATUS=$(jobforge get-status $JOB_ID | jq -r '.status')
   echo "Current status: $STATUS"
 
   if [[ "$STATUS" == "SUCCEEDED" ]]; then
@@ -555,7 +555,7 @@ while true; do
     break
   elif [[ "$STATUS" == "FAILED" ]]; then
     echo "Build failed! Getting logs..."
-    nomad-build get-logs $JOB_ID
+    jobforge get-logs $JOB_ID
     exit 1
   fi
 
@@ -563,7 +563,7 @@ while true; do
 done
 
 # Clean up
-nomad-build cleanup $JOB_ID
+jobforge cleanup $JOB_ID
 ```
 
 #### Monitoring Script
@@ -572,13 +572,13 @@ nomad-build cleanup $JOB_ID
 #!/bin/bash
 # Monitor build service
 
-export NOMAD_BUILD_URL=http://10.0.1.13:21855
+export JOB_SERVICE_URL=http://10.0.1.13:21855
 
 echo "Recent build history:"
-nomad-build get-history 5
+jobforge get-history 5
 
 echo -e "\nRunning jobs:"
-nomad-build get-history 20 | jq '.jobs[] | select(.status == "BUILDING" or .status == "TESTING" or .status == "PUBLISHING") | {id: .id, status: .status, owner: .config.owner}'
+jobforge get-history 20 | jq '.jobs[] | select(.status == "BUILDING" or .status == "TESTING" or .status == "PUBLISHING") | {id: .id, status: .status, owner: .config.owner}'
 ```
 
 ### Go Library Usage
@@ -844,7 +844,7 @@ You can test the MCP endpoints using the [MCP Inspector](https://github.com/mode
 
 1. **Start your build service:**
    ```bash
-   ./nomad-build-service
+   ./jobforge-service
    ```
 
 2. **Open MCP Inspector** in your browser
@@ -916,28 +916,28 @@ First, build and push a Docker image:
 
 ```bash
 # Build the binary
-go build -o nomad-build-service ./cmd/server
+go build -o jobforge-service ./cmd/server
 
 # Create Dockerfile (example)
 cat > Dockerfile << 'EOF'
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
-COPY nomad-build-service .
+COPY jobforge-service .
 EXPOSE 8080 9090
-CMD ["./nomad-build-service"]
+CMD ["./jobforge-service"]
 EOF
 
 # Build and push image
-docker build -t your-registry:5000/nomad-build-service:latest .
-docker push your-registry:5000/nomad-build-service:latest
+docker build -t your-registry:5000/jobforge-service:latest .
+docker push your-registry:5000/jobforge-service:latest
 ```
 
 ### Deploying with Nomad
 
 1. **Update the job file variables**:
    ```bash
-   # Edit nomad-build-service.nomad and update:
+   # Edit jobforge-service.nomad and update:
    # - datacenters = ["your-datacenter"] 
    # - region = "your-region"
    # - REGISTRY_URL in env section
@@ -951,13 +951,13 @@ docker push your-registry:5000/nomad-build-service:latest
 3. **Deploy to Nomad**:
    ```bash
    # Plan the deployment
-   nomad job plan nomad-build-service.nomad
+   nomad job plan jobforge-service.nomad
    
    # Deploy the service
-   nomad job run nomad-build-service.nomad
+   nomad job run jobforge-service.nomad
    
    # Check status
-   nomad job status nomad-build-service
+   nomad job status jobforge-service
    ```
 
 4. **Verify service registration**:
@@ -966,17 +966,17 @@ docker push your-registry:5000/nomad-build-service:latest
    consul catalog services
    
    # Check specific service
-   consul catalog service nomad-build-service
-   consul catalog service nomad-build-service-metrics
+   consul catalog service jobforge-service
+   consul catalog service jobforge-service-metrics
    ```
 
 5. **Configure Prometheus** to discover the service:
    ```yaml
    scrape_configs:
-     - job_name: 'nomad-build-service'
+     - job_name: 'jobforge-service'
        consul_sd_configs:
          - server: 'your-consul:8500'
-           services: ['nomad-build-service-metrics']
+           services: ['jobforge-service-metrics']
        relabel_configs:
          - source_labels: [__meta_consul_service_metadata_metrics_path]
            target_label: __metrics_path__
@@ -994,11 +994,11 @@ Once deployed, the service will be available at:
 
 To scale the service:
 ```bash
-# Update count in nomad-build-service.nomad
+# Update count in jobforge-service.nomad
 count = 3
 
 # Redeploy
-nomad job run nomad-build-service.nomad
+nomad job run jobforge-service.nomad
 ```
 
 ## Development
@@ -1022,7 +1022,7 @@ go run ./cmd/server
 ### Building Docker Image
 
 ```bash
-docker build -t nomad-build-service:latest .
+docker build -t jobforge-service:latest .
 ```
 
 ## Troubleshooting
@@ -1049,7 +1049,7 @@ docker build -t nomad-build-service:latest .
 Enable debug logging:
 ```bash
 export LOG_LEVEL=debug
-./nomad-build-service
+./jobforge-service
 ```
 
 #### MCP Protocol Verbose Logging
@@ -1058,7 +1058,7 @@ For debugging MCP protocol communication issues, enable verbose logging to captu
 
 ```bash
 export MCP_LOG_LEVEL=1
-./nomad-build-service
+./jobforge-service
 ```
 
 **Log Levels:**
@@ -1109,7 +1109,7 @@ The project includes comprehensive integration tests that:
 #### Running Integration Tests
 
 **Prerequisites:**
-- Nomad cluster running with the nomad-build-service deployed
+- Nomad cluster running with the jobforge-service deployed
 - Consul accessible for service discovery
 - Registry accessible at `registry.cluster:5000`
 
@@ -1151,10 +1151,10 @@ You can also test manually after discovering the service:
 
 ```bash
 # Discover service URL
-consul catalog service nomad-build-service
+consul catalog service jobforge-service
 
 # Or use Consul API to get the service endpoint
-SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
+SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/jobforge-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
 
 # Submit test job (replace with discovered URL or use SERVICE_URL)
 curl -X POST http://${SERVICE_URL:-localhost:8080}/json/submitJob \

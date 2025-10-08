@@ -88,7 +88,7 @@ cache/
 # Go build artifacts
 test-build
 nomad-build-service
-nomad-build
+jobforge
 server
 
 # Development tools

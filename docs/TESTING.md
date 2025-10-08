@@ -54,7 +54,7 @@ Package: nomad-mcp-builder/test/unit
 ### CLI Binary Build
 
 ```bash
-go build -o nomad-build ./cmd/nomad-build
+go build -o jobforge ./cmd/jobforge
 ```
 
 **Result**: ✅ Builds successfully (no errors)
@@ -63,9 +63,9 @@ go build -o nomad-build ./cmd/nomad-build
 
 **Test Commands**:
 ```bash
-./nomad-build version-info
-./nomad-build version-minor 2
-./nomad-build version-info
+./jobforge version-info
+./jobforge version-minor 2
+./jobforge version-info
 ```
 
 **Results**:
@@ -133,7 +133,7 @@ deploy/version.yaml contents:
 
 ### CLI Help Output Test
 
-**Command**: `./nomad-build --help`
+**Command**: `./jobforge --help`
 
 **Result**: ✅ Help text displays correctly with:
 - Clear command structure

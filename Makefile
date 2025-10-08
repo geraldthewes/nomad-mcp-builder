@@ -47,9 +47,9 @@ build: ## Build the application binary
 	@echo "Building ${BINARY_NAME} server for ${GOOS}/${GOARCH}..."
 	@CGO_ENABLED=0 go build ${LDFLAGS} -o bin/${BINARY_NAME} ./cmd/server
 	@echo "Server build completed: bin/${BINARY_NAME}"
-	@echo "Building nomad-build CLI for ${GOOS}/${GOARCH}..."
-	@CGO_ENABLED=0 go build ${LDFLAGS} -o bin/nomad-build ./cmd/nomad-build
-	@echo "CLI build completed: bin/nomad-build"
+	@echo "Building jobforge CLI for ${GOOS}/${GOARCH}..."
+	@CGO_ENABLED=0 go build ${LDFLAGS} -o bin/jobforge ./cmd/nomad-build
+	@echo "CLI build completed: bin/jobforge"
 
 build-linux: ## Build Linux binary
 	@echo "Building ${BINARY_NAME} for linux/amd64..."
@@ -63,11 +63,11 @@ build-all: ## Build binaries for all platforms
 	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ${LDFLAGS} -o bin/${BINARY_NAME}-darwin-arm64 ./cmd/server
 	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${LDFLAGS} -o bin/${BINARY_NAME}-windows-amd64.exe ./cmd/server
 	@echo "Building CLI for multiple platforms..."
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ${LDFLAGS} -o bin/nomad-build-linux-amd64 ./cmd/nomad-build
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ${LDFLAGS} -o bin/nomad-build-linux-arm64 ./cmd/nomad-build
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ${LDFLAGS} -o bin/nomad-build-darwin-amd64 ./cmd/nomad-build
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ${LDFLAGS} -o bin/nomad-build-darwin-arm64 ./cmd/nomad-build
-	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${LDFLAGS} -o bin/nomad-build-windows-amd64.exe ./cmd/nomad-build
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ${LDFLAGS} -o bin/jobforge-linux-amd64 ./cmd/nomad-build
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ${LDFLAGS} -o bin/jobforge-linux-arm64 ./cmd/nomad-build
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ${LDFLAGS} -o bin/jobforge-darwin-amd64 ./cmd/nomad-build
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ${LDFLAGS} -o bin/jobforge-darwin-arm64 ./cmd/nomad-build
+	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${LDFLAGS} -o bin/jobforge-windows-amd64.exe ./cmd/nomad-build
 	@echo "Multi-platform build completed"
 
 # Development targets

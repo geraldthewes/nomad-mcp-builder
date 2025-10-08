@@ -78,7 +78,7 @@ The service exposes these MCP endpoints via JSON-RPC over HTTP:
 
 ## CLI Tool
 
-The `nomad-build` CLI tool provides a user-friendly interface to the build service:
+The `jobforge` CLI tool provides a user-friendly interface to the build service:
 
 **Key Features:**
 - **YAML Configuration**: Support for both single-file and split-file (global + per-build) configurations
@@ -89,12 +89,12 @@ The `nomad-build` CLI tool provides a user-friendly interface to the build servi
 **CLI Commands:**
 ```bash
 # Submit a build job
-nomad-build submit-job -config build.yaml
-nomad-build submit-job -global deploy/global.yaml -config build.yaml
-nomad-build submit-job --image-tags "v1.0.0,latest" -config build.yaml
+jobforge submit-job -config build.yaml
+jobforge submit-job -global deploy/global.yaml -config build.yaml
+jobforge submit-job --image-tags "v1.0.0,latest" -config build.yaml
 
 # Submit and watch progress in real-time (recommended for interactive use)
-nomad-build submit-job -config build.yaml --watch
+jobforge submit-job -config build.yaml --watch
 # Output example:
 #   Watching job: abc123def456
 #   [12:34:56] 🔨 Status: BUILDING | Phase: build
@@ -103,16 +103,16 @@ nomad-build submit-job -config build.yaml --watch
 #   ✅ Job completed successfully
 
 # Query job status and logs (polling mode)
-nomad-build get-status <job-id>
-nomad-build get-logs <job-id> [phase]
+jobforge get-status <job-id>
+jobforge get-logs <job-id> [phase]
 
 # Job management
-nomad-build kill-job <job-id>
-nomad-build cleanup <job-id>
-nomad-build get-history [limit] [offset]
+jobforge kill-job <job-id>
+jobforge cleanup <job-id>
+jobforge get-history [limit] [offset]
 
 # Service health
-nomad-build health
+jobforge health
 ```
 
 **YAML Configuration:**
@@ -144,7 +144,7 @@ Two approaches for monitoring job progress:
   ```bash
   # Get service address and port
   consul catalog services
-  consul catalog service nomad-build-service
+  consul catalog service jobforge-service
   ```
 - Use the discovered address for curl commands, e.g.:
   ```bash
@@ -156,7 +156,7 @@ Two approaches for monitoring job progress:
 **Development Steps:**
 1. Build: `make build`
 2. Deploy: `REGISTRY_URL=registry.cluster:5000 make nomad-restart`
-3. Discover service: `consul catalog service nomad-build-service`
+3. Discover service: `consul catalog service jobforge-service`
 4. Test with discovered address: `curl -X POST http://<discovered-ip>:<discovered-port>/mcp/submitJob`
 
 **Do not assume your changes work without testing them immediately!**
@@ -210,7 +210,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
    ```
    This will:
    - Build the Docker image with the next patch version (e.g., 0.0.5)
-   - Push it to `registry.cluster:5000/nomad-build-service:0.0.5`
+   - Push it to `registry.cluster:5000/jobforge-service:0.0.5`
    - Create and push git tag `v0.0.5`
    - Also tag as `latest` for compatibility
 
@@ -222,7 +222,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
 
 4. **Verify the deployment worked:**
    ```bash
-   nomad job status nomad-build-service
+   nomad job status jobforge-service
    nomad alloc logs -stderr <alloc-id>  # Check for any startup errors
    ```
 
@@ -233,7 +233,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
 The service can be restarted to pull new images using:
 ```bash
 make nomad-restart
-# or directly: nomad job restart -yes nomad-build-service
+# or directly: nomad job restart -yes jobforge-service
 ```
 
 ### Testing Your Changes
@@ -279,7 +279,7 @@ If integration tests fail and you need to debug manually:
 
 ```bash
 # Find service URL
-curl -s http://10.0.1.12:8500/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
+curl -s http://10.0.1.12:8500/v1/catalog/service/jobforge-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
 
 # Submit manual test job
 SERVICE_URL=<discovered-url>

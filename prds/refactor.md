@@ -101,7 +101,7 @@ Additionally, the CLI tool needs a simpler approach to image tagging that doesn'
 
 **Preserve All Existing Functionality**:
 - ✅ Keep Prometheus metrics endpoint (`/metrics`)
-- ✅ Keep build history in Consul KV (`nomad-build-service/history/<job-id>`)
+- ✅ Keep build history in Consul KV (`jobforge-service/history/<job-id>`)
 - ✅ Keep distributed locking via Consul for concurrency control
 - ✅ Keep graceful job termination via `killJob` endpoint
 - ✅ Keep webhook notification support (now explicitly configured in job config)
@@ -173,16 +173,16 @@ Additionally, the CLI tool needs a simpler approach to image tagging that doesn'
 **CLI Command Updates**:
 ```bash
 # Single file mode
-nomad-build submit -config build.yaml
+jobforge submit -config build.yaml
 
 # Split file mode
-nomad-build submit -global deploy/global.yaml -config build.yaml
+jobforge submit -global deploy/global.yaml -config build.yaml
 
 # Existing commands remain unchanged
-nomad-build get-status <job-id>
-nomad-build get-logs <job-id> [phase]
-nomad-build kill-job <job-id>
-nomad-build cleanup <job-id>
+jobforge get-status <job-id>
+jobforge get-logs <job-id> [phase]
+jobforge kill-job <job-id>
+jobforge cleanup <job-id>
 ```
 
 **Validation**:
@@ -199,11 +199,11 @@ nomad-build cleanup <job-id>
 - Examples:
   ```bash
   # Use job-id as tag (default)
-  nomad-build submit-job -config build.yaml
+  jobforge submit-job -config build.yaml
   # Result: image tagged as job-id (e.g., "abc123def456")
 
   # Specify custom tags
-  nomad-build submit-job -config build.yaml --image-tags "latest,v1.0.0"
+  jobforge submit-job -config build.yaml --image-tags "latest,v1.0.0"
   # Result: image tagged as "latest" and "v1.0.0"
   ```
 
@@ -339,7 +339,7 @@ phases:
   - `kill-job`: Job termination
   - `cleanup`: Cleanup operations
 - Service discovery via Consul
-- Environment variables (`NOMAD_BUILD_URL`)
+- Environment variables (`JOB_SERVICE_URL`)
 - Integration examples
 
 **Update `README.md`**:
@@ -589,12 +589,12 @@ test:
 EOF
 
 # Check current version
-nomad-build version-info
+jobforge version-info
 # Output: Current version for branch 'feature/auth-fix': feature/auth-fix-v0.1.4
 # Output: Next version will be: feature/auth-fix-v0.1.5
 
 # Submit build (auto-increments patch version)
-nomad-build submit -global deploy/global.yaml -config build.yaml
+jobforge submit -global deploy/global.yaml -config build.yaml
 # Output: Job submitted: build-abc123def456
 # Output: Version: feature/auth-fix-v0.1.5
 # Output: Polling for status...

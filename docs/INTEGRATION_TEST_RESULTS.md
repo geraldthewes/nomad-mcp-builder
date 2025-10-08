@@ -19,14 +19,14 @@
 **Built and Pushed Image:**
 ```
 Version: v0.0.44
-Registry: registry.cluster:5000/nomad-build-service:0.0.44
+Registry: registry.cluster:5000/jobforge-service:0.0.44
 Tags: 0.0.44, latest
 Build Time: ~16s
 ```
 
 **Nomad Deployment:**
 ```
-Job ID: nomad-build-service
+Job ID: jobforge-service
 Status: running
 Allocations: 1 running
 Health: All services healthy
@@ -35,7 +35,7 @@ Port: 21654
 
 **Service Discovery:**
 ```
-Consul service: nomad-build-service
+Consul service: jobforge-service
 Address: 10.0.1.16:21654
 Status: Healthy
 ```
@@ -119,7 +119,7 @@ test_entry_point: true
 
 **CLI Command:**
 ```bash
-NOMAD_BUILD_URL=http://10.0.1.16:21654 ./nomad-build submit-job -config cli-test.yaml
+JOB_SERVICE_URL=http://10.0.1.16:21654 ./jobforge submit-job -config cli-test.yaml
 ```
 
 **Results:**

@@ -124,7 +124,7 @@ EOF
       }
 
       vault {
-        policies = ["nomad-build-service"]
+        policies = ["jobforge-service"]
         change_mode = "restart"
         role = "nomad-workloads"
       }
