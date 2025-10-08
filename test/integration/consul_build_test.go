@@ -465,7 +465,71 @@ func TestSequential(t *testing.T) {
 
 // TestWebhookNotifications tests webhook notification functionality
 // getLocalIP returns the local IP address for webhook testing
-func getLocalIP() (string, error) {
+// Tries to intelligently select the IP that can be reached from the service
+func getLocalIP(serviceURL string) (string, error) {
+	// First check for explicit override
+	if ip := os.Getenv("WEBHOOK_TEST_IP"); ip != "" {
+		return ip, nil
+	}
+
+	// Try to determine which interface can reach the service
+	// Extract host from service URL
+	serviceHost := ""
+	if strings.HasPrefix(serviceURL, "http://") {
+		serviceHost = strings.TrimPrefix(serviceURL, "http://")
+	} else if strings.HasPrefix(serviceURL, "https://") {
+		serviceHost = strings.TrimPrefix(serviceURL, "https://")
+	}
+
+	if colonIdx := strings.Index(serviceHost, ":"); colonIdx != -1 {
+		serviceHost = serviceHost[:colonIdx]
+	}
+
+	// Try to dial the service to see which local interface is used
+	if serviceHost != "" {
+		conn, err := net.Dial("udp", serviceHost+":80")
+		if err == nil {
+			defer conn.Close()
+			localAddr := conn.LocalAddr().(*net.UDPAddr)
+			localIP := localAddr.IP.String()
+
+			// Verify this IP is not a loopback
+			if !localAddr.IP.IsLoopback() {
+				return localIP, nil
+			}
+		}
+	}
+
+	// Fallback: Look for interfaces in 10.0.x.x range (cluster network)
+	interfaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range interfaces {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+
+				// Look for IPv4 addresses in 10.0.x.x range
+				if ip != nil && ip.To4() != nil {
+					ipStr := ip.String()
+					if strings.HasPrefix(ipStr, "10.0.") {
+						return ipStr, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Final fallback to original behavior
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return "", err
@@ -476,13 +540,18 @@ func getLocalIP() (string, error) {
 }
 
 func TestWebhookNotifications(t *testing.T) {
+	// Check if webhook testing is enabled
+	if os.Getenv("ENABLE_WEBHOOK_TESTS") != "true" {
+		t.Skip("Webhook tests require ENABLE_WEBHOOK_TESTS=true (requires network accessibility from Nomad cluster)")
+	}
+
 	// Start webhook receiver
 	receiver := NewWebhookReceiver(8889)
 	if err := receiver.Start(); err != nil {
 		t.Fatalf("Failed to start webhook receiver: %v", err)
 	}
 	defer receiver.Stop()
-	
+
 	// Discover service URL
 	t.Log("Discovering nomad-build-service via Consul...")
 	serviceURL, err := discoverServiceURL()
@@ -490,14 +559,18 @@ func TestWebhookNotifications(t *testing.T) {
 		t.Fatalf("Failed to discover service: %v", err)
 	}
 	t.Logf("Discovered service at: %s", serviceURL)
-	
+
 	// Prepare webhook configuration
 	webhookSecret := "test-secret-webhook-123"
-	localIP, err := getLocalIP()
+	localIP, err := getLocalIP(serviceURL)
 	if err != nil {
 		t.Fatalf("Failed to get local IP: %v", err)
 	}
 	webhookURL := fmt.Sprintf("http://%s:8889/webhook", localIP)
+
+	t.Logf("Webhook receiver listening at: %s", webhookURL)
+	t.Logf("Service at: %s", serviceURL)
+	t.Logf("Selected local IP: %s (set WEBHOOK_TEST_IP to override)", localIP)
 	
 	// Submit build job with webhook configuration
 	t.Log("Submitting build job with webhook configuration...")
