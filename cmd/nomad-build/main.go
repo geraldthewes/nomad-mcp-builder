@@ -141,6 +141,8 @@ repo_url: https://github.com/example/repo.git
     # Check service health
     nomad-build health
     # Output:
+    #   Service URL: http://10.0.1.16:21654
+    #
     #   ✅ Overall Status: healthy
     #   Timestamp: 2025-10-08T12:34:56Z
     #
@@ -541,6 +543,9 @@ func handleHealth(c *client.Client, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get health: %w", err)
 	}
+
+	// Display service URL
+	fmt.Printf("Service URL: %s\n\n", c.GetBaseURL())
 
 	// Display health status with color-coded output
 	statusSymbol := "✅"

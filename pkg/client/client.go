@@ -27,6 +27,11 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
+// GetBaseURL returns the base URL of the service
+func (c *Client) GetBaseURL() string {
+	return c.baseURL
+}
+
 // NewClientWithTimeout creates a new client with custom timeout
 func NewClientWithTimeout(baseURL string, timeout time.Duration) *Client {
 	return &Client{
