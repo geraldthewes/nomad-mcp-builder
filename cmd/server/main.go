@@ -46,6 +46,7 @@ func main() {
 		"vault_address":   cfg.Vault.Address,
 		"server_port":     cfg.Server.Port,
 		"metrics_enabled": cfg.Monitoring.Enabled,
+		"log_level":       level.String(),
 	}).Info("Starting Nomad Build Service")
 	
 	// Initialize storage (Consul)
@@ -94,8 +95,8 @@ func main() {
 		go startHealthMonitoring(consulStorage, nomadClient, metricsServer, logger)
 	}
 	
-	// Initialize MCP server
-	mcpServer := mcp.NewServer(cfg, nomadClient, consulStorage)
+	// Initialize MCP server with configured logger
+	mcpServer := mcp.NewServer(cfg, nomadClient, consulStorage, logger)
 	
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

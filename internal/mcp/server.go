@@ -71,12 +71,12 @@ func (s *Server) lockJob(jobID string) func() {
 }
 
 // NewServer creates a new MCP server
-func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.ConsulStorage) *Server {
+func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.ConsulStorage, logger *logrus.Logger) *Server {
 	return &Server{
 		config:        cfg,
 		nomadClient:   nomadClient,
 		storage:       storage,
-		logger:        logrus.New(),
+		logger:        logger,
 		wsConnections: make(map[string][]*websocket.Conn),
 		jobMutexes:    make(map[string]*sync.Mutex),
 		mcpSessions:   make(map[string]time.Time),
