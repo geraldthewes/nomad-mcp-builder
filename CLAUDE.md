@@ -88,13 +88,13 @@ The `jobforge` CLI tool provides a user-friendly interface to the build service:
 
 **CLI Commands:**
 ```bash
-# Submit a build job
-jobforge submit-job -config build.yaml
-jobforge submit-job -global deploy/global.yaml -config build.yaml
-jobforge submit-job --image-tags "v1.0.0,latest" -config build.yaml
+# Submit a build job (simple)
+jobforge submit-job build.yaml
+jobforge submit-job -global deploy/global.yaml build.yaml
+jobforge submit-job build.yaml --image-tags "v1.0.0,latest"
 
 # Submit and watch progress in real-time (recommended for interactive use)
-jobforge submit-job -config build.yaml --watch
+jobforge submit-job build.yaml --watch
 # Output example:
 #   Watching job: abc123def456
 #   [12:34:56] 🔨 Status: BUILDING | Phase: build

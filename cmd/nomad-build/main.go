@@ -28,7 +28,7 @@ DESCRIPTION:
 
 COMMANDS:
   Job Management:
-    submit-job [options] [config]     Submit a new build job
+    submit-job [options] [config-file]  Submit a new build job
     get-status <job-id>               Get status of a job
     get-logs <job-id> [phase]         Get logs for a job (phase: build, test, publish)
     kill-job <job-id>                 Kill a running job
@@ -47,8 +47,12 @@ SUBMIT-JOB OPTIONS:
   -global <file>            Global YAML configuration file (optional)
                             Typically: deploy/global.yaml
 
-  -config <file>            Per-build YAML configuration file (required for YAML mode)
+  -config <file>            Per-build YAML configuration file (optional)
                             Per-build values override global values
+
+  [config-file]             Positional argument: path to YAML config file
+                            Can be used instead of -config flag
+                            If not a file, reads from stdin
 
   --image-tags <tags>       Image tags to use (comma-separated)
                             If not specified, defaults to job-id
@@ -57,7 +61,10 @@ SUBMIT-JOB OPTIONS:
                             Displays status updates and exits when job completes
                             Requires Consul connection (default: localhost:8500)
 
-  If neither -global nor -config is specified, reads YAML from stdin or argument.
+  Configuration priority (highest to lowest):
+    1. -config flag with file path
+    2. Positional config file argument
+    3. YAML from stdin
 
 YAML CONFIGURATION:
   Global config (deploy/global.yaml) - Shared settings:
@@ -75,25 +82,24 @@ YAML CONFIGURATION:
 
 EXAMPLES:
   Submit Jobs:
-    # With global + per-build YAML configs (recommended)
-    jobforge submit-job -global deploy/global.yaml -config build.yaml
+    # Simple: config file as positional argument (recommended)
+    jobforge submit-job build.yaml
 
-    # With single YAML config (must include all required fields)
+    # With global config (recommended for teams)
+    jobforge submit-job -global deploy/global.yaml build.yaml
+
+    # Legacy flag style (still supported)
     jobforge submit-job -config build.yaml
 
     # With custom image tags (defaults to job-id if not specified)
-    jobforge submit-job -config build.yaml --image-tags "latest,stable"
+    jobforge submit-job build.yaml --image-tags "latest,stable"
 
     # Watch job progress in real-time (recommended for interactive use)
-    jobforge submit-job -config build.yaml --watch
+    jobforge submit-job build.yaml --watch
 
     # From stdin (YAML format)
     cat build.yaml | jobforge submit-job
-
-    # From YAML string argument
-    jobforge submit-job 'owner: test
-repo_url: https://github.com/example/repo.git
-...'
+    echo "owner: test..." | jobforge submit-job
 
   Query Jobs:
     # Get job status
@@ -273,8 +279,15 @@ func handleSubmitJob(c *client.Client, args []string) error {
 			perBuildConfigPath = args[i+1]
 			i += 2
 		} else if !strings.HasPrefix(arg, "-") {
-			// This is the config data (YAML string)
-			configData = arg
+			// This is a positional argument - check if it's a file path
+			if _, err := os.Stat(arg); err == nil {
+				// File exists, treat as config file path
+				perBuildConfigPath = arg
+			} else {
+				// Not a file, treat as YAML data string
+				configData = arg
+			}
+			i++
 			break
 		} else {
 			return fmt.Errorf("unknown flag: %s", arg)

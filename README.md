@@ -56,14 +56,17 @@ The service provides two ways to interact with it:
 The `jobforge` CLI tool provides the easiest way to interact with the build service:
 
 ```bash
-# Submit a build job with YAML configuration
-jobforge submit-job -config build.yaml
+# Submit a build job with YAML configuration (simple)
+jobforge submit-job build.yaml
 
 # Submit with global config + per-build override
-jobforge submit-job -global deploy/global.yaml -config build.yaml
+jobforge submit-job -global deploy/global.yaml build.yaml
 
 # Add additional image tags
-jobforge submit-job -config build.yaml --image-tags "v1.0.0,latest"
+jobforge submit-job build.yaml --image-tags "v1.0.0,latest"
+
+# Read config from stdin
+cat build.yaml | jobforge submit-job
 
 # Query job status and logs
 jobforge get-status <job-id>
@@ -224,14 +227,20 @@ test_entry_point: true
 #### Usage
 
 ```bash
-# With both global and per-build configs
-jobforge submit-job -global deploy/global.yaml -config build.yaml
+# Simple: config file as positional argument (recommended)
+jobforge submit-job build.yaml
 
-# With only per-build config (must include all required fields)
-jobforge submit-job -config build.yaml
+# With global config (recommended for teams)
+jobforge submit-job -global deploy/global.yaml build.yaml
 
 # Add extra tags in addition to auto-generated version tag
-jobforge submit-job -config build.yaml --image-tags "latest,stable"
+jobforge submit-job build.yaml --image-tags "latest,stable"
+
+# Read config from stdin
+cat build.yaml | jobforge submit-job
+
+# Legacy flag style (still supported)
+jobforge submit-job -config build.yaml
 ```
 
 
