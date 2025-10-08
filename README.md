@@ -238,9 +238,6 @@ jobforge submit-job build.yaml --image-tags "latest,stable"
 
 # Read config from stdin
 cat build.yaml | jobforge submit-job
-
-# Legacy flag style (still supported)
-jobforge submit-job -config build.yaml
 ```
 
 

@@ -47,12 +47,8 @@ SUBMIT-JOB OPTIONS:
   -global <file>            Global YAML configuration file (optional)
                             Typically: deploy/global.yaml
 
-  -config <file>            Per-build YAML configuration file (optional)
-                            Per-build values override global values
-
-  [config-file]             Positional argument: path to YAML config file
-                            Can be used instead of -config flag
-                            If not a file, reads from stdin
+  <config-file>             Configuration file path (positional argument)
+                            If not provided, reads from stdin
 
   --image-tags <tags>       Image tags to use (comma-separated)
                             If not specified, defaults to job-id
@@ -60,11 +56,6 @@ SUBMIT-JOB OPTIONS:
   -w, --watch               Watch job progress in real-time using Consul KV
                             Displays status updates and exits when job completes
                             Requires Consul connection (default: localhost:8500)
-
-  Configuration priority (highest to lowest):
-    1. -config flag with file path
-    2. Positional config file argument
-    3. YAML from stdin
 
 YAML CONFIGURATION:
   Global config (deploy/global.yaml) - Shared settings:
@@ -87,9 +78,6 @@ EXAMPLES:
 
     # With global config (recommended for teams)
     jobforge submit-job -global deploy/global.yaml build.yaml
-
-    # Legacy flag style (still supported)
-    jobforge submit-job -config build.yaml
 
     # With custom image tags (defaults to job-id if not specified)
     jobforge submit-job build.yaml --image-tags "latest,stable"
@@ -271,12 +259,6 @@ func handleSubmitJob(c *client.Client, args []string) error {
 				return fmt.Errorf("flag %s requires a value", arg)
 			}
 			globalConfigPath = args[i+1]
-			i += 2
-		} else if arg == "-config" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("flag %s requires a value", arg)
-			}
-			perBuildConfigPath = args[i+1]
 			i += 2
 		} else if !strings.HasPrefix(arg, "-") {
 			// This is a positional argument - check if it's a file path
