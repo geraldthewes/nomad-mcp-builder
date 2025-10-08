@@ -193,25 +193,26 @@ jobforge cleanup <job-id>
 #### FR3: CLI Simplified Image Tagging
 
 **Tagging Approach**:
-- Image tags can be specified via --image-tags flag (comma-separated list)
-- If --image-tags is not provided, the server uses job-id as the default tag
+- **job-id is ALWAYS included as the first tag** for complete traceability
+- Additional custom tags can be specified via --image-tags flag (comma-separated list)
 - No semantic versioning or automatic version management required
 - Examples:
   ```bash
-  # Use job-id as tag (default)
+  # Use job-id as only tag
   jobforge submit-job -config build.yaml
-  # Result: image tagged as job-id (e.g., "abc123def456")
+  # Result: image tagged as "abc123def456" (job-id)
 
-  # Specify custom tags
+  # Specify custom tags (job-id is automatically prepended)
   jobforge submit-job -config build.yaml --image-tags "latest,v1.0.0"
-  # Result: image tagged as "latest" and "v1.0.0"
+  # Result: image tagged as "abc123def456" (job-id), "latest", "v1.0.0"
   ```
 
 **Benefits**:
+- Every build is fully traceable via job-id tag
 - Eliminates need for version.yaml file
 - No branch detection or version tracking required
 - Simpler for users to understand and use
-- Tags are explicit and traceable via job-id
+- job-id tag ensures no conflicts between concurrent builds
 
 #### FR4: CLI Local Build History Management (Optional)
 

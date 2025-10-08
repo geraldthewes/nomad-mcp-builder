@@ -750,7 +750,7 @@ This allows fine-grained control where resource-intensive build phases can have 
 
 **Note**: The `image_name` field is now **required** and specifies the name of the Docker image (e.g., "myapp", "web-server"). The final image will be tagged as `registry_url/image_name:tag`.
 
-**Image Tags**: The `image_tags` field is **optional**. If not provided, it defaults to the job-id, ensuring every build has a unique, traceable tag.
+**Image Tags**: The `image_tags` field is **optional**. The job-id is **always included as the first tag** for complete traceability. If you specify additional tags, they are appended after the job-id. This ensures every build has a unique, traceable tag while allowing custom tags like "latest" or version numbers.
 
 ```bash
 curl -X POST http://localhost:8080/json/submitJob \
