@@ -1,14 +1,14 @@
-# Nomad Build Service
+# Job Forge
 
 A lightweight build automation system consisting of:
-- **MCP Server**: Stateless Go server providing JSON-RPC over HTTP interface
+- ** Build Server**: Stateless Go server providing JSON-RPC over HTTP interface
 - **CLI Tool**: Command-line client with YAML configuration support and version management
 
 The system enables users and coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure.
 
 ## Features
 
-- **MCP Protocol Support**: JSON-RPC over HTTP for agent communication
+- **REST Protocol Support**: JSON-RPC over HTTP for agent communication
 - **CLI Tool**: User-friendly command-line interface with YAML configuration
 - **Semantic Versioning**: Automatic patch incrementing with branch-aware tagging
 - **Three-Phase Build Pipeline**: Build → Test → Publish workflow orchestration
@@ -86,16 +86,12 @@ jobforge version-minor <ver>    # Set minor version (resets patch to 0)
 - **Branch-Aware Tags**: Generates tags like `feature-auth-v0.1.5`
 - **Simple Interface**: No need to manually construct JSON-RPC requests
 
-### 2. MCP Protocol Endpoint (Agent/Tool Integration)
+### 2. Service Protocol Endpoint (Agent/Tool Integration)
 
-The **Model Context Protocol (MCP)** endpoint is used for agent communication:
+The endpoint is used for agent communication:
 
-- **Endpoint:** `/mcp`
+- **Endpoint:** `/json`
 - **Transport:** JSON-RPC 2.0 over HTTP
-- **Use with:** MCP Inspector, MCP clients, coding agents
-- **Connection:** `http://localhost:8080/mcp`
-
-**Supported MCP tools:** `submitJob`, `getStatus`, `getLogs`, `killJob`, `cleanup`, `getHistory`
 
 ### 3. Direct JSON-RPC API (Testing/Debugging)
 
@@ -110,7 +106,6 @@ Direct HTTP/JSON endpoints for testing and non-MCP integrations:
 - `POST /json/getHistory` - Get job history
 - `GET /json/streamLogs?job_id=<id>` - WebSocket log streaming
 
-**Important:** The `/json/*` endpoints are **NOT** part of the MCP protocol - they are custom HTTP endpoints for direct integration and testing.
 
 ### 3. Health & Monitoring
 
@@ -120,25 +115,8 @@ Direct HTTP/JSON endpoints for testing and non-MCP integrations:
 
 ### Connection Examples
 
-**MCP Inspector (Recommended):**
-```
-URL: http://localhost:8080/mcp
-Transport: Simple JSON-RPC
-```
 
-**Advanced MCP Clients (Streaming):**
-```
-URL: http://localhost:8080/stream
-Transport: Streamable HTTP
-```
-
-**Legacy MCP Clients:**
-```
-URL: http://localhost:8080/sse
-Transport: Server-Sent Events
-```
-
-**Direct HTTP/curl (Non-MCP):**
+**Direct HTTP/curl:**
 ```bash
 curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
@@ -256,34 +234,6 @@ jobforge submit-job -config build.yaml
 jobforge submit-job -config build.yaml --image-tags "latest,stable"
 ```
 
-#### Version Management
-
-The CLI automatically manages semantic versioning:
-
-```bash
-# Current version stored in deploy/version.yaml
-# File format:
-# version:
-#   major: 0
-#   minor: 1
-#   patch: 5
-
-# View current version
-jobforge version-info
-# Output:
-#   Version: 0.1.5
-#   Tag: v0.1.5
-#   Branch: feature-new-feature
-#   Branch Tag: feature-new-feature-v0.1.5
-
-# Manual version bumps
-jobforge version-major 1  # Sets version to 1.0.0
-jobforge version-minor 2  # Sets version to 0.2.0
-
-# Auto-increment on submit
-# Each 'submit-job' automatically increments patch version
-# and adds branch-aware tag to image_tags
-```
 
 ### Server Environment Variables
 
@@ -306,7 +256,7 @@ jobforge version-minor 2  # Sets version to 0.2.0
 | `REGISTRY_USERNAME` | _(empty)_ | Registry username (optional for public registries) |
 | `REGISTRY_PASSWORD` | _(empty)_ | Registry password (optional for public registries) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
-| `MCP_LOG_LEVEL` | `0` | MCP protocol verbose logging: `0`=compact (default), `1`=verbose with full request/response JSON |
+
 
 ### Consul Configuration
 
@@ -838,47 +788,6 @@ ws.onmessage = function(event) {
 };
 ```
 
-## Testing with MCP Inspector
-
-You can test the MCP endpoints using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
-
-1. **Start your build service:**
-   ```bash
-   ./jobforge-service
-   ```
-
-2. **Open MCP Inspector** in your browser
-
-3. **Connect to the service:**
-   - **URL:** `http://localhost:8080/mcp`
-   - **Transport:** Simple JSON-RPC (recommended for Inspector)
-
-   **Alternative:** For streaming support, use `http://localhost:8080/stream`
-
-4. **Available MCP Tools:**
-   - `submitJob` - Submit a new build job
-   - `getStatus` - Check job status  
-   - `getLogs` - Retrieve job logs
-   - `killJob` - Terminate a running job
-   - `cleanup` - Clean up job resources
-   - `getHistory` - Get build history
-   - `purgeFailedJob` - Remove zombie/dead jobs from Nomad
-
-5. **Example MCP Tool Call:**
-   ```json
-   {
-     "name": "submitJob",
-     "arguments": {
-       "repo_url": "https://github.com/example/repo.git",
-       "image_name": "myapp",
-       "registry_url": "registry.example.com",
-       "image_tags": ["latest", "v1.0.0"],
-       "test_commands": ["npm test", "npm run lint"]
-     }
-   }
-   ```
-
-The MCP Inspector will show you the available tools, their schemas, and allow you to test tool calls interactively.
 
 ## Monitoring
 
@@ -1309,7 +1218,7 @@ For CI/CD environments with proper network setup, enable them in your pipeline c
 
 ## License
 
-[Specify License]
+MIT
 
 ## Support
 
