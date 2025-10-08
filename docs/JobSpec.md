@@ -115,6 +115,112 @@ Configure HTTP webhooks for build notifications:
 | `webhook_on_failure` | boolean | `true` | Send webhook on failure |
 | `webhook_headers` | map[string]string | - | Custom HTTP headers |
 
+#### Webhook Payload Format
+
+When a webhook is triggered, the service sends an HTTP POST request with the following characteristics:
+
+**HTTP Headers:**
+```
+Content-Type: application/json
+User-Agent: nomad-build-service/1.0
+X-Webhook-Signature: sha256=<hmac-signature>  # If webhook_secret is configured
+<custom-headers>  # Any headers specified in webhook_headers
+```
+
+**JSON Payload:**
+```json
+{
+  "job_id": "abc123def456",
+  "status": "SUCCEEDED",
+  "timestamp": "2024-01-15T10:30:45Z",
+  "duration": 125000000000,
+  "owner": "myteam",
+  "repo_url": "https://github.com/myorg/myservice.git",
+  "git_ref": "main",
+  "image_name": "myservice",
+  "image_tags": ["v1.0.0", "latest"],
+  "phase": "publish",
+  "error": "",
+  "logs": {
+    "build": "...",
+    "test": "...",
+    "publish": "..."
+  },
+  "metrics": {
+    "job_start": "2024-01-15T10:28:40Z",
+    "job_end": "2024-01-15T10:30:45Z",
+    "build_start": "2024-01-15T10:28:40Z",
+    "build_end": "2024-01-15T10:29:30Z",
+    "test_start": "2024-01-15T10:29:31Z",
+    "test_end": "2024-01-15T10:30:15Z",
+    "publish_start": "2024-01-15T10:30:16Z",
+    "publish_end": "2024-01-15T10:30:45Z"
+  }
+}
+```
+
+**Payload Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `job_id` | string | Unique job identifier |
+| `status` | string | Job status: `SUCCEEDED`, `FAILED`, `BUILDING`, `TESTING`, `PUBLISHING` |
+| `timestamp` | string (RFC3339) | When the webhook was triggered |
+| `duration` | number (nanoseconds) | Total job duration (if completed) |
+| `owner` | string | Job owner from config |
+| `repo_url` | string | Git repository URL |
+| `git_ref` | string | Git branch/tag/commit |
+| `image_name` | string | Docker image name |
+| `image_tags` | array[string] | Applied image tags |
+| `phase` | string | Current or failed phase: `build`, `test`, `publish` |
+| `error` | string | Error message (only present on failure) |
+| `logs` | object | Phase-specific logs (optional) |
+| `metrics` | object | Timing metrics for each phase (optional) |
+
+**HMAC Signature Verification:**
+
+If `webhook_secret` is configured, verify the webhook authenticity:
+
+```python
+# Python example
+import hmac
+import hashlib
+
+def verify_webhook(payload_bytes, signature_header, secret):
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        payload_bytes,
+        hashlib.sha256
+    ).hexdigest()
+    expected_sig = f"sha256={expected}"
+    return hmac.compare_digest(expected_sig, signature_header)
+
+# Usage
+signature = request.headers.get('X-Webhook-Signature')
+is_valid = verify_webhook(request.body, signature, 'my-secret-key')
+```
+
+```bash
+# Bash example
+PAYLOAD='{"job_id":"abc123",...}'
+SECRET="my-secret-key"
+EXPECTED="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | cut -d' ' -f2)"
+# Compare with X-Webhook-Signature header
+```
+
+**Webhook Events:**
+
+Webhooks are sent for these events (configurable via `webhook_on_success`/`webhook_on_failure`):
+- Job completed successfully (status: `SUCCEEDED`)
+- Job failed (status: `FAILED`)
+- Build phase failed
+- Test phase failed
+
+**Retry Behavior:**
+- Failed webhooks are retried up to 3 times
+- Exponential backoff between retries (1s, 2s, 3s)
+- 30-second timeout per request
+
 ## Complete Examples
 
 ### Minimal Configuration (JSON)
