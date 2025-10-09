@@ -112,7 +112,7 @@ func TestMCPServerValidationConsistency(t *testing.T) {
 			expectedErrMsg: "image_name is required",
 		},
 		{
-			name: "empty_image_tags",
+			name: "empty_image_tags_gets_default",
 			mcpArgs: map[string]interface{}{
 				"owner":           "test-org",
 				"repo_url":        "https://github.com/test/repo.git",
@@ -122,8 +122,7 @@ func TestMCPServerValidationConsistency(t *testing.T) {
 				"image_tags":      []interface{}{},
 				"registry_url":    "registry.example.com/test-app",
 			},
-			expectError:    true,
-			expectedErrMsg: "image_tags is required and cannot be empty",
+			expectError: false, // image_tags gets default job-id
 		},
 		{
 			name: "missing_registry_url",
@@ -328,7 +327,7 @@ func TestMCPRequestFormatting(t *testing.T) {
 	}
 
 	// Validate that the arguments contain required fields (excluding those with defaults)
-	requiredFields := []string{"owner", "repo_url", "image_name", "image_tags", "registry_url"}
+	requiredFields := []string{"owner", "repo_url", "image_name", "registry_url"}
 	for _, field := range requiredFields {
 		if _, exists := arguments[field]; !exists {
 			t.Errorf("Required field '%s' missing from arguments", field)
@@ -446,9 +445,7 @@ func validateJobConfigStrict(config *types.JobConfig) error {
 	if config.ImageName == "" {
 		return &ValidationError{"image_name is required"}
 	}
-	if len(config.ImageTags) == 0 {
-		return &ValidationError{"image_tags is required and cannot be empty"}
-	}
+	// image_tags is optional - will default to job-id if not provided
 	if config.RegistryURL == "" {
 		return &ValidationError{"registry_url is required"}
 	}

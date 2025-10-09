@@ -11,7 +11,7 @@ import (
 	"nomad-mcp-builder/pkg/types"
 )
 
-// Client represents a client for the nomad-build service
+// Client represents a client for the jobforge service
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -25,6 +25,11 @@ func NewClient(baseURL string) *Client {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// GetBaseURL returns the base URL of the service
+func (c *Client) GetBaseURL() string {
+	return c.baseURL
 }
 
 // NewClientWithTimeout creates a new client with custom timeout
@@ -206,6 +211,27 @@ func (c *Client) GetHistory(limit int, offset int) (*types.GetHistoryResponse, e
 	}
 
 	var response types.GetHistoryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// Health checks the health of the service
+func (c *Client) Health() (*types.HealthResponse, error) {
+	resp, err := c.doRequest("GET", "/health", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Health endpoint returns 503 when unhealthy, but we still want to parse the response
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var response types.HealthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}

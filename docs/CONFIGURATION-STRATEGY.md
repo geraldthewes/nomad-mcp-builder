@@ -40,12 +40,12 @@ Use for settings that:
 **Examples:**
 ```bash
 # Set via Consul KV
-consul kv put nomad-build-service/config/build_timeout "45m"
-consul kv put nomad-build-service/config/test_timeout "20m" 
-consul kv put nomad-build-service/config/kill_timeout "60s"
+consul kv put jobforge-service/config/build_timeout "45m"
+consul kv put jobforge-service/config/test_timeout "20m" 
+consul kv put jobforge-service/config/kill_timeout "60s"
 
-consul kv put nomad-build-service/config/default_resource_limits/cpu "1500"
-consul kv put nomad-build-service/config/default_resource_limits/memory "4096"
+consul kv put jobforge-service/config/default_resource_limits/cpu "1500"
+consul kv put jobforge-service/config/default_resource_limits/memory "4096"
 ```
 
 ## KillTimeout Configuration
@@ -72,7 +72,7 @@ export KILL_TIMEOUT=30s   # 30 second default
 
 **Via Consul (Runtime Override):**
 ```bash
-consul kv put nomad-build-service/config/kill_timeout "60s"
+consul kv put jobforge-service/config/kill_timeout "60s"
 ```
 
 ### **Recommended Values:**

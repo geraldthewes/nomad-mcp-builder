@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the Nomad Build Service, a lightweight, stateless MCP-based server written in Golang. The service enables coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure. It orchestrates builds, tests, and publishes using Buildah for daemonless image building.
+This is the Nomad Build Service, consisting of:
+1. **MCP Server**: Lightweight, stateless Go application providing JSON-RPC over HTTP interface
+2. **CLI Tool**: Command-line client with YAML configuration support and version management
+
+The service enables users and coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure. It orchestrates builds, tests, and publishes using Buildah for daemonless image building.
 
 **For complete project requirements and architecture details, see [PRD.md](PRD.md).**
 
-**Current Status:** Fully implemented and operational. The service provides a complete build-test-publish pipeline with improved Docker-native test execution.
+**Current Status:** Fully implemented and operational. The service provides a complete build-test-publish pipeline with improved Docker-native test execution. MCP transport has been simplified to JSON-RPC over HTTP only.
 
 ## Architecture (Current Implementation)
 
@@ -35,6 +39,7 @@ The system consists of:
 - **CRITICAL**: All MCP server implementations and changes MUST conform to the latest Model Context Protocol specification
 - **Specification URL**: https://modelcontextprotocol.io/specification/latest
 - **Current Protocol Version**: `2025-06-18` (as of latest update)
+- **Supported Transport**: JSON-RPC over HTTP only (SSE and Streamable HTTP have been removed for simplicity)
 - **Required Compliance Areas**:
   - Initialization sequence (initialize request/response, notifications/initialized)
   - Protocol version negotiation
@@ -42,14 +47,14 @@ The system consists of:
   - Notification vs request handling (ID field presence)
   - Tool definitions and invocation format
   - Error codes and error handling
-  - All supported transport methods (HTTP, SSE, Streamable HTTP)
 - When implementing new features or fixing bugs, always verify against the latest spec
 - Integration tests should validate spec compliance
 
 ### Key Libraries to Use
 - `github.com/hashicorp/nomad/api` - Nomad API client
 - `github.com/sirupsen/logrus` - Logging
-- Standard `net/http` or `gorilla/websocket` - HTTP/WebSocket handling
+- `gopkg.in/yaml.v3` - YAML configuration parsing
+- Standard `net/http` - HTTP handling (WebSocket and SSE removed)
 
 ### Security Requirements
 - Buildah must run in rootless mode
@@ -62,14 +67,73 @@ The system consists of:
 - Required parameters must match between both interfaces (owner, repo_url, git_ref, dockerfile_path, image_name, image_tags, registry_url)
 - This prevents runtime errors like "invalid reference format" when Docker image names are malformed due to missing parameters
 
-## MCP API Endpoints (Planned)
+## MCP API Endpoints
 
-The service will expose these MCP endpoints:
+The service exposes these MCP endpoints via JSON-RPC over HTTP:
 - `submitJob`: Submit build request with Git repo, credentials refs, test commands
 - `getStatus`: Poll job status (`PENDING`, `BUILDING`, `TESTING`, `PUBLISHING`, `SUCCEEDED`, `FAILED`)
 - `getLogs`: Retrieve phase-specific logs for debugging
 - `killJob`: Terminate running jobs
-- Cleanup endpoint for resource management
+- `cleanup`: Resource cleanup
+
+## CLI Tool
+
+The `jobforge` CLI tool provides a user-friendly interface to the build service:
+
+**Key Features:**
+- **YAML Configuration**: Support for both single-file and split-file (global + per-build) configurations
+- **Simplified Image Tagging**: Uses job-id as default tag, or specify custom tags with `--image-tags`
+- **Real-time Job Watching**: Watch job progress in real-time using Consul KV (push-based, no polling)
+- **Webhook Support**: Service-level webhooks for external integrations (CI/CD, Slack, etc.)
+
+**CLI Commands:**
+```bash
+# Submit a build job (simple)
+jobforge submit-job build.yaml
+jobforge submit-job -global deploy/global.yaml build.yaml
+jobforge submit-job build.yaml --image-tags "v1.0.0,latest"
+
+# Submit and watch progress in real-time (recommended for interactive use)
+jobforge submit-job build.yaml --watch
+# Output example:
+#   Watching job: abc123def456
+#   [12:34:56] 🔨 Status: BUILDING | Phase: build
+#   [12:35:42] 🧪 Status: TESTING | Phase: test
+#   [12:36:15] 📦 Status: PUBLISHING | Phase: publish
+#   ✅ Job completed successfully
+
+# Query job status and logs (polling mode)
+jobforge get-status <job-id>
+jobforge get-logs <job-id> [phase]
+
+# Job management
+jobforge kill-job <job-id>
+jobforge cleanup <job-id>
+jobforge get-history [limit] [offset]
+
+# Service health
+jobforge health
+```
+
+**YAML Configuration:**
+The CLI supports YAML job configurations with deep merge capability:
+- **Global config** (`deploy/global.yaml`): Shared settings across all builds
+- **Per-build config** (e.g., `build.yaml`): Build-specific overrides
+- Per-build values override global values for any non-zero field
+
+**Job Progress Monitoring:**
+Two approaches for monitoring job progress:
+1. **Consul KV Watching (CLI)**: Use `--watch` flag for real-time push-based updates via Consul blocking queries
+   - Efficient, no polling overhead
+   - Displays live status updates with timestamps and emojis
+   - Exits automatically when job completes or fails
+   - Requires Consul connection (default: localhost:8500)
+
+2. **Webhooks (External Integrations)**: Configure webhooks in YAML for external systems
+   - Supports phase-level events (build/test/publish started/completed/failed)
+   - HMAC-SHA256 signature authentication
+   - Retry logic with 3 attempts
+   - Custom headers and success/failure filtering
 
 ## Development Workflow
 
@@ -80,7 +144,7 @@ The service will expose these MCP endpoints:
   ```bash
   # Get service address and port
   consul catalog services
-  consul catalog service nomad-build-service
+  consul catalog service jobforge-service
   ```
 - Use the discovered address for curl commands, e.g.:
   ```bash
@@ -92,7 +156,7 @@ The service will expose these MCP endpoints:
 **Development Steps:**
 1. Build: `make build`
 2. Deploy: `REGISTRY_URL=registry.cluster:5000 make nomad-restart`
-3. Discover service: `consul catalog service nomad-build-service`
+3. Discover service: `consul catalog service jobforge-service`
 4. Test with discovered address: `curl -X POST http://<discovered-ip>:<discovered-port>/mcp/submitJob`
 
 **Do not assume your changes work without testing them immediately!**
@@ -146,7 +210,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
    ```
    This will:
    - Build the Docker image with the next patch version (e.g., 0.0.5)
-   - Push it to `registry.cluster:5000/nomad-build-service:0.0.5`
+   - Push it to `registry.cluster:5000/jobforge-service:0.0.5`
    - Create and push git tag `v0.0.5`
    - Also tag as `latest` for compatibility
 
@@ -158,7 +222,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
 
 4. **Verify the deployment worked:**
    ```bash
-   nomad job status nomad-build-service
+   nomad job status jobforge-service
    nomad alloc logs -stderr <alloc-id>  # Check for any startup errors
    ```
 
@@ -169,7 +233,7 @@ When making fixes to the codebase, follow this workflow to build, deploy, and te
 The service can be restarted to pull new images using:
 ```bash
 make nomad-restart
-# or directly: nomad job restart -yes nomad-build-service
+# or directly: nomad job restart -yes jobforge-service
 ```
 
 ### Testing Your Changes
@@ -215,7 +279,7 @@ If integration tests fail and you need to debug manually:
 
 ```bash
 # Find service URL
-curl -s http://10.0.1.12:8500/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
+curl -s http://10.0.1.12:8500/v1/catalog/service/jobforge-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"'
 
 # Submit manual test job
 SERVICE_URL=<discovered-url>

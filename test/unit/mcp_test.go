@@ -140,7 +140,7 @@ func TestMCPSubmitJobValidation(t *testing.T) {
 	}
 
 	// Test required fields match what MCP interface actually requires (after applying defaults)
-	expectedRequired := []string{"owner", "repo_url", "image_name", "image_tags", "registry_url"}
+	expectedRequired := []string{"owner", "repo_url", "image_name", "registry_url"}
 
 	if len(submitJobTool.InputSchema.Required) != len(expectedRequired) {
 		t.Errorf("Expected %d required fields, got %d", len(expectedRequired), len(submitJobTool.InputSchema.Required))
@@ -205,6 +205,18 @@ func TestMCPParameterConsistencyWithValidation(t *testing.T) {
 				"registry_credentials_path": "secret/registry-creds",
 				"test_commands":             []interface{}{"npm test", "npm run e2e"},
 				"test_entry_point":          true,
+			},
+		},
+		{
+			name: "empty image_tags (should default to job-id)",
+			args: map[string]interface{}{
+				"owner":        "test-user",
+				"repo_url":     "https://github.com/test/repo.git",
+				"git_ref":      "main",
+				"dockerfile_path": "Dockerfile",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{},
+				"registry_url": "docker.io/test",
 			},
 		},
 	}
@@ -313,17 +325,6 @@ func TestMCPParameterConsistencyWithValidation(t *testing.T) {
 				"image_tags":   []interface{}{"latest"},
 			},
 			expectedErr: "image_name is required",
-		},
-		{
-			name:        "empty image_tags",
-			args:        map[string]interface{}{
-				"owner":        "test-user",
-				"repo_url":     "https://github.com/test/repo.git",
-				"registry_url": "docker.io/test",
-				"image_name":   "test-app",
-				"image_tags":   []interface{}{},
-			},
-			expectedErr: "image_tags is required and cannot be empty",
 		},
 		{
 			name:        "missing registry_url",
@@ -490,9 +491,7 @@ func validateJobConfigMock(config *types.JobConfig) error {
 	if config.ImageName == "" {
 		return &ValidationError{"image_name is required"}
 	}
-	if len(config.ImageTags) == 0 {
-		return &ValidationError{"image_tags is required and cannot be empty"}
-	}
+	// image_tags is optional - will default to job-id if not provided
 	if config.RegistryURL == "" {
 		return &ValidationError{"registry_url is required"}
 	}

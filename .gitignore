@@ -88,6 +88,8 @@ cache/
 # Go build artifacts
 test-build
 nomad-build-service
+jobforge
+server
 
 # Development tools
 .serena/

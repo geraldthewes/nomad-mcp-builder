@@ -71,12 +71,12 @@ func (s *Server) lockJob(jobID string) func() {
 }
 
 // NewServer creates a new MCP server
-func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.ConsulStorage) *Server {
+func NewServer(cfg *config.Config, nomadClient *nomad.Client, storage *storage.ConsulStorage, logger *logrus.Logger) *Server {
 	return &Server{
 		config:        cfg,
 		nomadClient:   nomadClient,
 		storage:       storage,
-		logger:        logrus.New(),
+		logger:        logger,
 		wsConnections: make(map[string][]*websocket.Conn),
 		jobMutexes:    make(map[string]*sync.Mutex),
 		mcpSessions:   make(map[string]time.Time),
@@ -103,24 +103,31 @@ func (s *Server) Start(ctx context.Context) error {
 	// RESTful API endpoints (both /json and /mcp prefixes for compatibility)
 	mux.HandleFunc("/json/submitJob", s.handleSubmitJob)
 	mux.HandleFunc("/mcp/submitJob", s.handleSubmitJob)
+	mux.HandleFunc("/json/getStatus", s.handleGetStatus)
+	mux.HandleFunc("/mcp/getStatus", s.handleGetStatus)
+	mux.HandleFunc("/json/getLogs", s.handleGetLogs)
+	mux.HandleFunc("/mcp/getLogs", s.handleGetLogs)
+	mux.HandleFunc("/json/killJob", s.handleKillJob)
+	mux.HandleFunc("/mcp/killJob", s.handleKillJob)
+	mux.HandleFunc("/json/cleanup", s.handleCleanup)
+	mux.HandleFunc("/mcp/cleanup", s.handleCleanup)
+	mux.HandleFunc("/json/getHistory", s.handleGetHistory)
+	mux.HandleFunc("/mcp/getHistory", s.handleGetHistory)
 	mux.HandleFunc("/json/job/", s.handleJobResource)
 	mux.HandleFunc("/mcp/job/", s.handleJobResource)
 
 	// MCP Protocol endpoints
-	mux.HandleFunc("/mcp", s.handleMCPRequest)           // Legacy POST endpoint
-	mux.HandleFunc("/stream", s.handleMCPStreamableHTTP) // Streamable HTTP transport (2025-06-18)
-	mux.HandleFunc("/sse", s.handleMCPSSE)              // Legacy SSE transport (2024-11-05)
+	mux.HandleFunc("/mcp", s.handleMCPRequest)           // JSON-RPC over HTTP
 
 	// Health check endpoints
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ready", s.handleReady)
 
 	server := &http.Server{
-		Addr:        fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
-		Handler:     mux,
-		ReadTimeout: 30 * time.Second,
-		// WriteTimeout removed - SSE/long-lived connections manage their own lifetime
-		// via context cancellation and keep-alive mechanisms
+		Addr:         fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 
 	s.logger.WithField("address", server.Addr).Info("Starting MCP server")
@@ -175,6 +182,16 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		}).Warn("REST API request failed: invalid body")
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
+	}
+	
+	// Log full request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "submitJob",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Submit job request details")
 	}
 	
 	// Validate required fields
@@ -260,6 +277,16 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getStatus",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get status request details")
+	}
+	
 	// Get job from storage
 	job, err := s.storage.GetJob(req.JobID)
 	if err != nil {
@@ -301,6 +328,16 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
+	}
+	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getLogs",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get logs request details")
 	}
 	
 	// Get job from storage
@@ -386,6 +423,16 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "killJob",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Kill job request details")
+	}
+	
 	// Get job from storage
 	job, err := s.storage.GetJob(req.JobID)
 	if err != nil {
@@ -430,6 +477,16 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "cleanup",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Cleanup request details")
+	}
+	
 	var cleanedJobs []string
 	var err error
 	
@@ -468,6 +525,16 @@ func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeErrorResponse(w, "Invalid request body", http.StatusBadRequest, err.Error())
 		return
+	}
+	
+	// Log request details at debug level
+	if s.logger.Level >= logrus.DebugLevel {
+		reqJSON, _ := json.MarshalIndent(req, "", "  ")
+		s.logger.WithFields(map[string]interface{}{
+			"endpoint":    "getHistory",
+			"remote_addr": r.RemoteAddr,
+			"request":     string(reqJSON),
+		}).Debug("Get history request details")
 	}
 	
 	// Set defaults
@@ -1009,486 +1076,6 @@ func (s *Server) getOrCreateSession(r *http.Request) string {
 	return sessionID
 }
 
-// handleMCPStreamableHTTP provides streamable HTTP transport (MCP 2025-06-18 spec)
-// Per spec: Each POST request contains exactly ONE JSON-RPC message, server responds and closes connection
-func (s *Server) handleMCPStreamableHTTP(w http.ResponseWriter, r *http.Request) {
-	startTime := time.Now()
-
-	// Log incoming request with headers (for debugging load balancer issues)
-	logFields := map[string]interface{}{
-		"method":         r.Method,
-		"uri":            r.RequestURI,
-		"remote_addr":    r.RemoteAddr,
-		"user_agent":     r.UserAgent(),
-		"content_length": r.ContentLength,
-		"content_type":   r.Header.Get("Content-Type"),
-	}
-
-	// Log load balancer headers if present
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		logFields["x_forwarded_for"] = xff
-	}
-	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
-		logFields["x_real_ip"] = xrip
-	}
-
-	s.logger.WithFields(logFields).Info("MCP stream connection received")
-
-	// Handle CORS preflight
-	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id")
-		w.Header().Set("Access-Control-Max-Age", "3600")
-		w.WriteHeader(http.StatusOK)
-
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"method":      r.Method,
-			"uri":         r.RequestURI,
-			"remote_addr": r.RemoteAddr,
-			"status":      http.StatusOK,
-			"duration_ms": duration.Milliseconds(),
-		}).Info("MCP stream preflight completed")
-		return
-	}
-
-	// Handle GET requests for SSE streaming (server→client messages)
-	if r.Method == http.MethodGet {
-		s.handleMCPStreamableHTTPSSE(w, r, startTime)
-		return
-	}
-
-	// Only POST allowed for client→server requests
-	if r.Method != http.MethodPost {
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"method":      r.Method,
-			"uri":         r.RequestURI,
-			"remote_addr": r.RemoteAddr,
-			"status":      http.StatusMethodNotAllowed,
-			"duration_ms": duration.Milliseconds(),
-			"error":       "Method not allowed",
-		}).Info("MCP stream request completed")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Read request body (exactly ONE JSON-RPC message per spec)
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"method":      r.Method,
-			"uri":         r.RequestURI,
-			"remote_addr": r.RemoteAddr,
-			"status":      http.StatusBadRequest,
-			"duration_ms": duration.Milliseconds(),
-			"error":       "Failed to read body: " + err.Error(),
-		}).Info("MCP stream request completed")
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	// Parse JSON-RPC request
-	var mcpReq MCPRequest
-	if err := json.Unmarshal(bodyBytes, &mcpReq); err != nil {
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"method":      r.Method,
-			"uri":         r.RequestURI,
-			"remote_addr": r.RemoteAddr,
-			"status":      http.StatusBadRequest,
-			"duration_ms": duration.Milliseconds(),
-			"error":       "Parse error: " + err.Error(),
-		}).Info("MCP stream request completed")
-
-		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	// Detect if this is a notification (requests with no id field)
-	isNotification := mcpReq.ID == nil
-
-	// Log the MCP method call
-	s.logger.WithFields(map[string]interface{}{
-		"mcp_method":     mcpReq.Method,
-		"mcp_id":         mcpReq.ID,
-		"remote_addr":    r.RemoteAddr,
-		"is_notification": isNotification,
-	}).Info("MCP stream method call")
-
-	// Verbose logging: log full request and extract tool name for tools/call
-	if s.config.Logging.LogLevel >= 1 {
-		requestLogFields := map[string]interface{}{
-			"raw_request": string(bodyBytes),
-			"mcp_method":  mcpReq.Method,
-		}
-
-		// Extract tool name if this is a tools/call
-		if mcpReq.Method == "tools/call" {
-			if params, ok := mcpReq.Params.(map[string]interface{}); ok {
-				if toolName, ok := params["name"].(string); ok {
-					requestLogFields["tool_name"] = toolName
-				}
-			}
-		}
-
-		s.logger.WithFields(requestLogFields).Info("MCP stream request detail (LOG_LEVEL=1)")
-	}
-
-	// Handle notifications per MCP spec: return 202 Accepted with no body
-	if isNotification {
-		duration := time.Since(startTime)
-
-		// Set CORS headers
-		w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-		w.WriteHeader(http.StatusAccepted) // 202 Accepted, no response body
-
-		s.logger.WithFields(map[string]interface{}{
-			"mcp_method":  mcpReq.Method,
-			"remote_addr": r.RemoteAddr,
-			"status":      http.StatusAccepted,
-			"duration_ms": duration.Milliseconds(),
-		}).Info("MCP stream notification acknowledged")
-		return
-	}
-
-	// Get or create session ID
-	sessionID := s.getOrCreateSession(r)
-
-	// Process the request
-	var response MCPResponse
-	switch mcpReq.Method {
-	case "tools/list":
-		response = s.handleMCPToolsList(mcpReq)
-	case "tools/call":
-		response = s.handleMCPToolsCall(mcpReq)
-	case "initialize":
-		response = s.handleMCPInitialize(mcpReq)
-	case "ping":
-		response = s.handleMCPPing(mcpReq)
-	default:
-		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
-	}
-
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-	w.Header().Set("Mcp-Session-Id", sessionID) // Send session ID to client
-
-	// Send JSON-RPC response
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"method":     mcpReq.Method,
-			"request_id": mcpReq.ID,
-			"remote_addr": r.RemoteAddr,
-		}).Error("Failed to encode MCP stream response")
-		return
-	}
-
-	// Log successful completion
-	duration := time.Since(startTime)
-	s.logger.WithFields(map[string]interface{}{
-		"mcp_method":  mcpReq.Method,
-		"mcp_id":      mcpReq.ID,
-		"remote_addr": r.RemoteAddr,
-		"duration_ms": duration.Milliseconds(),
-		"mcp_success": response.Error == nil,
-		"session_id":  sessionID,
-	}).Info("MCP stream method completed")
-
-	// Verbose logging: log full response
-	if s.config.Logging.LogLevel >= 1 {
-		if responseJSON, err := json.Marshal(response); err == nil {
-			s.logger.WithFields(map[string]interface{}{
-				"raw_response": string(responseJSON),
-				"mcp_method":   mcpReq.Method,
-				"mcp_id":       mcpReq.ID,
-			}).Info("MCP stream response detail (LOG_LEVEL=1)")
-		}
-	}
-
-	// Connection closes naturally after response is sent (per MCP spec)
-}
-
-// handleMCPStreamableHTTPSSE handles GET requests for server→client SSE streaming
-// Per MCP spec: Server can send messages to client via SSE when client GETs the endpoint
-// Since we don't send server-initiated messages, we maintain an idle SSE connection
-func (s *Server) handleMCPStreamableHTTPSSE(w http.ResponseWriter, r *http.Request, startTime time.Time) {
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", s.config.Server.CORSOrigin)
-	w.Header().Set("X-Accel-Buffering", "no") // Disable buffering in nginx/proxies
-
-	// Get session ID from request
-	clientSessionID := r.Header.Get("Mcp-Session-Id")
-	sessionID := s.getOrCreateSession(r)
-	w.Header().Set("Mcp-Session-Id", sessionID)
-
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr":        r.RemoteAddr,
-		"session_id":         sessionID,
-		"client_session_id":  clientSessionID,
-		"session_reused":     clientSessionID != "" && clientSessionID == sessionID,
-		"protocol":           "streamable-http",
-		"version":            "2025-06-18",
-	}).Info("MCP Streamable HTTP channel established")
-
-	// Check if flushing is supported
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	// Send initial comment to establish stream
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr": r.RemoteAddr,
-		"session_id":  sessionID,
-	}).Debug("MCP Streamable HTTP: Attempting to send initial SSE comment")
-	
-	n, err := fmt.Fprintf(w, ": MCP SSE stream connected\n\n")
-	if err != nil {
-		s.logger.WithFields(map[string]interface{}{
-			"remote_addr": r.RemoteAddr,
-			"session_id":  sessionID,
-			"error":       err.Error(),
-		}).Error("MCP Streamable HTTP: Failed to write initial comment")
-		return
-	}
-	
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr":  r.RemoteAddr,
-		"session_id":   sessionID,
-		"bytes_written": n,
-	}).Debug("MCP Streamable HTTP: Initial comment written, flushing...")
-	
-	flusher.Flush()
-
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr": r.RemoteAddr,
-		"session_id":  sessionID,
-	}).Info("MCP Streamable HTTP: Initial SSE comment sent and flushed, entering keepalive loop")
-
-	// Keep connection alive with periodic pings
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	// Context for handling disconnects
-	ctx := r.Context()
-	
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr": r.RemoteAddr,
-		"session_id":  sessionID,
-	}).Debug("MCP Streamable HTTP: Waiting for context done or ticker...")
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Client disconnected
-			duration := time.Since(startTime)
-			ctxErr := ctx.Err()
-			
-			s.logger.WithFields(map[string]interface{}{
-				"remote_addr": r.RemoteAddr,
-				"session_id":  sessionID,
-				"duration_ms": duration.Milliseconds(),
-				"protocol":    "streamable-http",
-				"ctx_error":   ctxErr,
-				"ctx_err_str": fmt.Sprintf("%v", ctxErr),
-			}).Warn("MCP Streamable HTTP channel closed - context done")
-			
-			// Log potential causes
-			if ctxErr == context.Canceled {
-				s.logger.WithFields(map[string]interface{}{
-					"remote_addr": r.RemoteAddr,
-					"session_id":  sessionID,
-				}).Warn("Context canceled - likely client closed connection or proxy timeout")
-			} else if ctxErr == context.DeadlineExceeded {
-				s.logger.WithFields(map[string]interface{}{
-					"remote_addr": r.RemoteAddr,
-					"session_id":  sessionID,
-				}).Warn("Context deadline exceeded - likely timeout configuration")
-			}
-			return
-
-		case <-ticker.C:
-			// Send ping to keep connection alive
-			s.logger.WithFields(map[string]interface{}{
-				"remote_addr": r.RemoteAddr,
-				"session_id":  sessionID,
-				"protocol":    "streamable-http",
-			}).Debug("MCP Streamable HTTP: Sending keepalive ping")
-			
-			n, err := fmt.Fprintf(w, "event: ping\ndata: {}\n\n")
-			if err != nil {
-				s.logger.WithFields(map[string]interface{}{
-					"remote_addr": r.RemoteAddr,
-					"session_id":  sessionID,
-					"error":       err.Error(),
-				}).Error("MCP Streamable HTTP: Failed to write ping event")
-				return
-			}
-			
-			flusher.Flush()
-
-			s.logger.WithFields(map[string]interface{}{
-				"remote_addr":  r.RemoteAddr,
-				"session_id":   sessionID,
-				"protocol":     "streamable-http",
-				"bytes_written": n,
-			}).Info("MCP Streamable HTTP keepalive ping sent and flushed")
-		}
-	}
-}
-
-// handleMCPSSE provides legacy SSE transport (MCP 2024-11-05 spec) for backward compatibility
-// GET: Establishes SSE connection and sends endpoint event
-// POST: Receives client messages (sent to dynamically generated endpoint)
-func (s *Server) handleMCPSSE(w http.ResponseWriter, r *http.Request) {
-	startTime := time.Now()
-
-	s.logger.WithFields(map[string]interface{}{
-		"method":      r.Method,
-		"uri":         r.RequestURI,
-		"remote_addr": r.RemoteAddr,
-		"user_agent":  r.UserAgent(),
-	}).Info("MCP SSE request received")
-
-	switch r.Method {
-	case http.MethodGet:
-		s.handleMCPSSEStream(w, r, startTime)
-	case http.MethodPost:
-		s.handleMCPSSEPost(w, r, startTime)
-	case http.MethodOptions:
-		// Handle CORS preflight
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, mcp-protocol-version")
-		w.WriteHeader(http.StatusOK)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleMCPSSEStream handles GET requests for SSE stream establishment
-func (s *Server) handleMCPSSEStream(w http.ResponseWriter, r *http.Request, startTime time.Time) {
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	// Send initial endpoint event - tells client where to POST messages
-	// In SSE transport, server sends an "endpoint" event with the POST URL
-	postEndpoint := fmt.Sprintf("http://%s/sse", r.Host)
-	endpointEvent := map[string]interface{}{
-		"endpoint": postEndpoint,
-	}
-	endpointJSON, _ := json.Marshal(endpointEvent)
-
-	fmt.Fprintf(w, "event: endpoint\n")
-	fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON))
-	flusher.Flush()
-
-	s.logger.WithFields(map[string]interface{}{
-		"remote_addr":   r.RemoteAddr,
-		"post_endpoint": postEndpoint,
-		"protocol":      "legacy-sse",
-		"version":       "2024-11-05",
-	}).Info("MCP Legacy SSE transport stream established")
-
-	// Keep connection alive and send ping events periodically
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			duration := time.Since(startTime)
-			s.logger.WithFields(map[string]interface{}{
-				"remote_addr": r.RemoteAddr,
-				"duration_ms": duration.Milliseconds(),
-				"protocol":    "legacy-sse",
-			}).Info("MCP Legacy SSE transport stream closed")
-			return
-		case <-ticker.C:
-			// Send ping to keep connection alive
-			fmt.Fprintf(w, "event: ping\n")
-			fmt.Fprintf(w, "data: {}\n\n")
-			flusher.Flush()
-
-			s.logger.WithFields(map[string]interface{}{
-				"remote_addr": r.RemoteAddr,
-				"protocol":    "legacy-sse",
-			}).Debug("MCP Legacy SSE keepalive ping sent")
-		}
-	}
-}
-
-// handleMCPSSEPost handles POST requests for client messages in SSE transport
-func (s *Server) handleMCPSSEPost(w http.ResponseWriter, r *http.Request, startTime time.Time) {
-	var mcpReq MCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&mcpReq); err != nil {
-		duration := time.Since(startTime)
-		s.logger.WithFields(map[string]interface{}{
-			"remote_addr": r.RemoteAddr,
-			"duration_ms": duration.Milliseconds(),
-			"error":       "Parse error: " + err.Error(),
-		}).Warn("MCP SSE POST parse error")
-		response := NewMCPErrorResponse(nil, MCPErrorParseError, "Parse error", err.Error())
-		s.writeMCPResponse(w, response)
-		return
-	}
-
-	s.logger.WithFields(map[string]interface{}{
-		"mcp_method":  mcpReq.Method,
-		"mcp_id":      mcpReq.ID,
-		"remote_addr": r.RemoteAddr,
-	}).Info("MCP SSE POST method call")
-
-	var response MCPResponse
-	switch mcpReq.Method {
-	case "tools/list":
-		response = s.handleMCPToolsList(mcpReq)
-	case "tools/call":
-		response = s.handleMCPToolsCall(mcpReq)
-	case "initialize":
-		response = s.handleMCPInitialize(mcpReq)
-	case "notifications/initialized":
-		// Client signals initialization complete - acknowledge with empty result
-		response = NewMCPResponse(mcpReq.ID, map[string]interface{}{})
-	case "ping":
-		response = s.handleMCPPing(mcpReq)
-	default:
-		response = NewMCPErrorResponse(mcpReq.ID, MCPErrorMethodNotFound, "Method not found", mcpReq.Method)
-	}
-
-	duration := time.Since(startTime)
-	s.logger.WithFields(map[string]interface{}{
-		"mcp_method":  mcpReq.Method,
-		"mcp_id":      mcpReq.ID,
-		"remote_addr": r.RemoteAddr,
-		"duration_ms": duration.Milliseconds(),
-		"mcp_success": response.Error == nil,
-	}).Info("MCP SSE POST completed")
-
-	s.writeMCPResponse(w, response)
-}
 
 // handleMCPInitialize handles MCP initialization
 func (s *Server) handleMCPInitialize(req MCPRequest) MCPResponse {
@@ -1918,9 +1505,7 @@ func validateJobConfig(config *types.JobConfig) error {
 	if config.ImageName == "" {
 		return fmt.Errorf("image_name is required")
 	}
-	if len(config.ImageTags) == 0 {
-		return fmt.Errorf("image_tags is required and cannot be empty")
-	}
+	// image_tags is optional - will default to job-id if not provided
 	if config.RegistryURL == "" {
 		return fmt.Errorf("registry_url is required")
 	}
@@ -1930,7 +1515,7 @@ func validateJobConfig(config *types.JobConfig) error {
 		// This is allowed - no testing will be performed
 	}
 	
-	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands)
+	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands, image_tags)
 	// are allowed to be empty
 	
 	return nil

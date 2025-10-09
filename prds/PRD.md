@@ -1,0 +1,411 @@
+# Product Requirements Document (PRD): Nomad Build Service (Version 2.0)
+
+## 1. Overview
+
+### 1.1 Product Description
+
+Nomad Build Service is a lightweight, stateless server written in Golang that enables coding agents to submit Docker image build jobs remotely. It orchestrates builds, tests, and publishes using Nomad as the backend infrastructure, ensuring all operations (server, builds, tests) run as Nomad jobs. The service uses Buildah for daemonless image building from Dockerfiles in git repos, supports test execution with network access, provides detailed build logs for error analysis, and publishes successful images to Docker private registries.
+
+**Important**: The service implements graceful job termination to prevent corruption during Docker and registry operations. Users must NEVER use direct Nomad job commands (`nomad job stop`, `nomad job deregister`, etc.) to terminate build service jobs. Always use the service's `killJob` endpoint instead.
+
+This product is designed for agentic code development, offloading resource-intensive builds to remote Nomad clusters while empowering agents to debug failures autonomously through accessible logs.
+
+### 1.2 Target Audience
+
+* **AI Coding Agents:** The primary user, interacting via API for secure, contextual, and automated build-test-deploy workflows. The service provides both polling and WebSocket interfaces to accommodate different agent capabilities and preferences.  
+* **Developers:** Individuals building containerized applications environments who can leverage the service for standardized builds.
+
+### 1.3 Business Goals
+
+* Enable seamless, remote Docker image builds for agents without requiring local high-end compute resources or access to local GPUs.  
+* Provide detailed, accessible logs to allow for autonomous self-correction by agents upon build or test failure.  
+* Ensure integration with Nomad for orchestrated workloads.  
+* Minimize dependencies by using daemonless build tools (Buildah) and avoiding complex external CI/CD platforms.
+
+### 1.4 Agent Scenarios (User Stories)
+
+* **As a coding agent, I want to submit my Git repository and have the service build a Docker image** so that I can build and test my application in a containerized environment without local dependencies. Applications dependencies shall be provided either directly or in consul and vault for secrets. The details of application building, testing, configuration and dependencies shall be provided in  a Job Configuration. The format of that job configuration shall be documented.  
+* **As a coding agent, when a build fails, I need to receive detailed logs** so that I can identify the error in my Dockerfile or source code, attempt a fix, and resubmit the job.  
+* **As a coding agent, after a successful build, I need the service to run my specified test commands against the new image** to verify my code changes work as expected.  
+* **As a coding agent, when my tests fail, I need to access the test output logs** so that I can debug the application logic, push a fix, and trigger a new build and test run.
+
+## 2. Scope
+
+### 2.1 In Scope
+
+* API server for job submission, status queries, and log retrieval.
+* Nomad job orchestration for: repo cloning, image building (via Buildah), testing (running commands within the new image), and publishing.
+* Support for network access during the test phase (e.g., for connecting to databases or other services like S3).
+* Robust error handling with full, phase-specific logs accessible via API.
+* Secure credential handling using pre-populated Nomad Vault variables for Git and container registries.
+* Leveraging Buildah's layer caching via a persistent host volume to accelerate builds, especially for images with extensive dependencies (e.g., CUDA, Python packages).
+
+### 2.2 Out of Scope
+
+* **Advanced Volume Support (Initial Version):** Direct mounting of arbitrary host volumes during tests will be deferred to a future version to simplify the initial implementation.  
+* **Full Git Integration:** The service will not integrate with Git webhooks or triggers; the agent is responsible for initiating a job by submitting a job configuration.  
+* **Advanced Multi-User Authentication:** Authentication is handled at the infrastructure level by Nomad ACLs and secure API communication, not within the application itself.  
+* **Non-Dockerfile Builds:** The service assumes the input is always a Git repository containing a Dockerfile.  
+* **Integrated Image Scanning:** Security and vulnerability scanning are considered extensions to be added in the future.
+
+## 3. Features and Requirements
+
+### 3.1 Functional Requirements
+
+#### FR1: Job Submission
+
+* The agent will commit their changes to a new build branch, publish their changes to the git repo before evoking the build. Further changes made until  the build succeeds and tests passes shall be made by the agent on the same branch.   
+* The agent submits a build request via an API endpoint via a configuration descriptor to be documented.  
+* The server validates the inputs and generates a unique job ID.  
+* **Secrets Handling:** The agent passes references (e.g., `nomad/jobs/my-repo-secret`) to pre-populated secrets in Nomad's Vault for private Git repositories and container registries. The service itself does not handle raw credentials.
+* **Git Authentication:** Supports SSH keys and Personal Access Tokens via Vault secret injection, both referenced in job config as `git_credentials_path`.  
+* Once the build and the test passes, the branch will be merged by the agent back in the current development branch.
+
+#### FR1.1: API Contract (Example)
+
+A build submission request from the agent could look like this:
+
+{
+
+  "owner": "John Doe",
+
+  "repo_url": "https://github.com/my-org/my-app.git",
+
+  "git_ref": "main",
+
+  "git_credentials_path": "nomad/jobs/my-git-creds",
+
+  "dockerfile_path": "Dockerfile",
+
+  "image_tags": ["latest", "1.2.3"],  // Optional: defaults to job-id if not provided
+
+  "registry_url": "docker.io/my-org/my-app",
+
+  "registry_credentials_path": "nomad/jobs/my-registry-creds",
+
+  "test_commands": [
+
+    "/app/run_unit_tests.sh",
+
+    "/app/run_integration_tests.sh"
+
+  ],
+  
+  "test_entry_point" : false
+
+}
+
+#### FR2: Build Phase
+
+* A Nomad batch job is spawned using the `quay.io/buildah/stable` image.  
+* The job task clones the specified Git repository and executes `buildah bud --file <path> --tag <temp> .`.  
+* **Build Caching:** The job mounts a shared, persistent host volume (e.g., `/opt/nomad/data/buildah-cache`) to enable Buildah's layer caching, significantly speeding up subsequent builds. Instructions will be provided on how to configure.  
+* If the build fails, the job terminates and logs the complete Buildah output for retrieval.
+* If there is a test is specified, a temporary build image is used so that publishing to the final image only occurs if the test suceeeds
+* If no test is specified than there is only a build phase and the build is published to  image specified in the job
+
+#### FR3: Test Phase
+
+* Only run if a test is configured in the job
+* If the build succeeds, separate Nomad batch jobs are spawned to run tests using the Docker driver directly.  
+* **Mode 1 - Custom Commands:** For each test command specified in `test_commands`, a separate Nomad job is created that runs the built image with Docker driver (`docker run <image> sh -c "<command>"`).
+* **Mode 2 - Entry Point Testing:** If `test_entry_point` is true, a Nomad job runs the built image directly without any command arguments, executing the image's default ENTRYPOINT/CMD.
+* **Architecture:** Tests run as native Docker containers in Nomad, not via buildah commands. This eliminates buildah complexity and leverages Nomad's native Docker driver capabilities.
+* **Networking:** Uses host networking mode to avoid CNI plugin requirements while still allowing network access for tests.
+* **Parallelization:** Multiple test commands can run in parallel as separate Nomad jobs, improving test execution time.
+* If any test job exits with a non-zero status code, the overall test phase is marked as failed, and all test logs are captured.
+
+#### FR4: Publish Phase
+
+* Only run if a test was specified and the test suceeded
+* If all tests pass, a final Nomad batch job pushes the image to the specified registry using `buildah push <temp> docker://<registry>/<repo>:<tag>`.  
+* Authentication is handled by Nomad injecting the referenced registry credentials from Vault into the job's environment.
+
+#### FR5: Logging and Monitoring
+
+* **Real-time Status Updates:** The service should provide access to real-time status updates (e.g., `PENDING`, `BUILDING`, `TESTING`, `PUBLISHING`, `SUCCEEDED`, `FAILED`) via a polling `getStatus` endpoint.  
+* **Accessible Logs:** The agent must be able to retrieve detailed, separated logs for each phase (build, test, publish) via a `getLogs` endpoint using the job ID. This is critical for enabling the agent to diagnose and fix errors autonomously. The logs should be the raw output from the underlying Buildah commands. The logs should be accessible during the build and test process to interrupt if necessary.  
+* Please be clear if any infrastructure is required for storing the logs (example prometheus.)  
+* **Actionable Error Reporting:** On failure, the API response should clearly indicate the failed phase and provide direct access to its logs. The goal is to give the agent all necessary information to self-correct.
+
+#### FR6: Graceful Job Termination
+
+* **Killing a Job**: The agent or the user should be able to kill a build or test job at any time.
+* **Graceful Termination**: The `killJob` command implements graceful termination to prevent corruption of Docker and registry operations:
+  * During build phase: Allows current build operations to complete before stopping (prevents corrupted images)
+  * During test phase: Safely terminates test containers without affecting other phases
+  * During publish phase: Allows registry push operations to complete before stopping (prevents corrupted registry state)
+  * Fallback: If graceful stop fails, the system will force termination as a last resort
+* **Important**: Callers must NEVER use direct Nomad job commands (`nomad job stop`, etc.) to terminate build service jobs, as this bypasses graceful termination safeguards. Always use the `killJob` endpoint instead.
+
+#### FR7: Query and Streaming Endpoints
+
+* **`submitJob`:** Accepts a JSON payload (see FR1.1) and returns a job ID.  
+* **`getStatus`:** Takes a job ID and returns the current status with basic metrics.  
+* **`getLogs`:** Takes a job ID and returns phase-specific logs (e.g., `{"build": "...", "test": "..."}`).  
+* **`streamLogs`:** WebSocket endpoint for real-time log streaming during builds.
+* **`killJob`:** Terminates running jobs and cleans up resources.  
+* **`cleanup`:** Removes zombie jobs and temporary artifacts.
+* **`health`:** Service health check endpoint for monitoring.
+* **`ready`:** Readiness probe endpoint (Consul/Vault connectivity).
+
+#### FR8: Intermediate Image Handling
+
+* **Registry Workflow:** Use private Docker registry for sharing images between build/test/publish phases.
+* **Build Phase:** Tags temporary image as `<registry>/temp/<job-id>:latest` and pushes to registry.
+* **Test Phase:** Pulls temporary image from registry for test execution.
+* **Publish Phase:** Retags temporary image and pushes to final destination.
+* **Cleanup:** Removes temporary images after job completion or failure.
+
+#### FR8.1: Concurrency Control and Registry Protection
+
+* **Branch-Based Isolation:** Temporary images include branch names to prevent conflicts: `<registry>/bdtemp-imagename:branch-job-id`
+  * Different branches can build the same image concurrently
+  * Same branch builds are mutually exclusive to prevent corruption
+* **Distributed Locking:** Consul-based distributed locks prevent concurrent builds of the same image on the same branch
+  * Lock key format: `image-registry-imagename-branch`
+  * 30-minute timeout with automatic session-based cleanup
+  * Acquired before build starts, released on completion/failure
+* **Registry Corruption Prevention:**
+  * Single-phase builds (build-only, no tests) share the same locking mechanism as 3-phase builds
+  * Publish operations are mutually exclusive for the same final image
+  * Automatic lock cleanup on job completion, failure, or service crash
+* **Implementation:** Uses Consul's native session-based distributed locking for robust, crash-resistant mutual exclusion
+
+#### FR9: Monitoring and Metrics
+
+* **Prometheus Metrics:** Expose metrics on `/metrics` endpoint including:
+  * `build_duration_seconds`: Build phase timing
+  * `test_duration_seconds`: Test phase timing  
+  * `publish_duration_seconds`: Publish phase timing
+  * `job_success_rate`: Success rate by time window
+  * `concurrent_jobs_total`: Current running jobs
+  * `resource_usage`: CPU/memory consumption per job
+* **Status Integration:** Include basic metrics in `getStatus` response for agent visibility.
+
+#### FR10: Build History (Optional)
+
+* **Record Keeping:** Maintain last 50 build records in Consul KV at `jobforge-service/history/<job-id>`.
+* **Data Stored:** Job config, status, duration, basic metrics.
+* **Access:** Available via `getHistory` endpoint for debugging.
+* **Cleanup:** Automatic removal of records older than 30 days.
+
+#### FR11: Command Line Interface (CLI) Tool
+
+* **Go Client Library:** A reusable Go client library (`pkg/client`) that wraps all service functionality, providing programmatic access to the build service API from Go applications.
+* **CLI Binary:** A standalone command-line tool (`jobforge`) that provides complete access to all service functionality through a user-friendly interface.
+* **YAML Configuration Support:** The CLI supports YAML job configurations from files, command-line arguments, and stdin, enabling flexible integration with scripts and automation tools.
+* **Simplified Image Tagging:** Image tags can be specified via `--image-tags` flag. If not provided, the job-id is used as the default tag, eliminating the need for complex version management.
+* **Service Discovery Integration:** Automatic integration with Consul service discovery to locate the build service without hardcoding addresses.
+* **Environment Configuration:** Support for service URL configuration via `JOB_SERVICE_URL` environment variable for CI/CD pipeline integration.
+* **Real-time Job Watching:** The CLI supports real-time job progress monitoring via Consul KV using blocking queries (push-based updates) with the `--watch` flag, eliminating the need for polling and providing instant status updates.
+* **Complete Feature Parity:** The CLI must provide access to all functionality including:
+  * `submit-job` - Submit build jobs with YAML configuration, optional --image-tags flag, and --watch flag for real-time progress
+  * `get-status` - Query job status with detailed metrics
+  * `get-logs` - Retrieve logs for all phases (build, test, publish) with optional phase filtering
+  * `kill-job` - Terminate running jobs gracefully
+  * `cleanup` - Clean up job resources and temporary artifacts
+  * `get-history` - Retrieve job history with pagination support
+  * `health` - Check service health status
+* **Automation Friendly:** Structured JSON output for all commands to enable easy parsing by scripts and monitoring tools.
+* **Error Handling:** Comprehensive error messages with HTTP status codes and detailed error descriptions from the service.
+* **Documentation Integration:** Complete usage examples including CI/CD pipeline integration, monitoring scripts, and Go library usage patterns.
+
+#### FR11.1: CLI Command Interface
+
+The CLI tool provides the following command structure:
+
+```
+jobforge [flags] <command> [args...]
+
+Commands:
+  submit-job [options]      Submit build job with YAML configuration
+    -global <file>          Global YAML configuration file (optional)
+    -config <file>          Per-build YAML configuration file
+    --image-tags <tags>     Image tags (comma-separated, defaults to job-id)
+    -w, --watch             Watch job progress in real-time using Consul KV
+
+  get-status <job-id>       Get job status and metrics
+  get-logs <job-id> [phase] Get logs (all phases or specific: build, test, publish)
+  kill-job <job-id>         Terminate running job
+  cleanup <job-id>          Clean up job resources
+  get-history [limit] [offset] Get job history with pagination
+  health                    Check service health status
+
+Flags:
+  -h, --help               Show help message
+  -u, --url <url>          Service URL (overrides JOB_SERVICE_URL)
+
+Job Monitoring:
+  The CLI supports two approaches for monitoring job progress:
+
+  1. Watch Mode (--watch): Real-time push-based updates via Consul KV blocking queries
+     - Efficient, no polling overhead
+     - Displays live status updates with timestamps
+     - Exits automatically when job completes or fails
+     - Example: jobforge submit-job -config build.yaml --watch
+
+  2. Polling Mode: Manual status queries using get-status command
+     - Useful for scripting and automation
+     - Provides detailed JSON output
+     - Example: jobforge get-status <job-id>
+```
+
+#### FR11.2: Integration Requirements
+
+* **CI/CD Pipeline Support:** The CLI must integrate seamlessly with automated build pipelines, supporting job submission from configuration files, status monitoring loops, and automatic cleanup on completion.
+* **Service Discovery:** Automatic discovery of the build service through Consul catalog API, eliminating the need for hardcoded service addresses in deployment scripts.
+* **Library Reusability:** The underlying Go client library must be independently usable for building custom integrations and tools that interact with the build service programmatically.
+
+### 3.2 Non-Functional Requirements
+
+#### NFR1: Best Practices
+
+* Log everything: Log all tool calls, including inputs, outputs, and timestamps. Comprehensive logging is essential for troubleshooting and post-mortem analysis when things go wrong.  
+* Handle timeouts: Assume that the agent or the underlying connection may time out. Tools should be resilient to interruptions and be able to resume or recover gracefully if preempted.  
+* Plan for future custom dashboards: Use monitoring platforms with customizable dashboards to visualize key metrics like response times and task completion rates. This helps track performance and spot recurring issues.  
+* Review and follow all current best practices for all the components of this service.  
+* Verify and use the latest stable version of all components of this service.
+
+#### NFR2: Performance
+
+* The service should handle concurrent build submissions, with the actual build execution scaled by the Nomad cluster.  
+* Build time should be optimized via layer caching.
+
+#### NFR3: Security
+
+* Buildah should be run in rootless mode to minimize container privileges.  
+* Secrets for Git and registry access must be managed exclusively through Nomad's Vault integration. The server is stateless and never handles secrets directly.
+
+#### NFR3: Reliability
+
+* **Atomicity:** The entire build-test-publish workflow is treated as a single, atomic operation. If any phase fails, the entire job is considered failed. There is no mechanism to retry a single phase; the agent must resubmit the entire job.  
+* **Cleanup:** Nomad batch jobs should be configured with a garbage collection policy (`gc.enabled = true`) to ensure that job specifications and allocations are automatically removed from the cluster after completion or failure. Temporary images must also be cleaned up. The agent should also be able to initiate a cleanup.
+* **Zombie Job Management:** On service startup, query Nomad for orphaned jobs with service prefix. Provide `cleanupZombies` endpoint to terminate abandoned jobs. Automatic cleanup of jobs running longer than configured timeout.
+
+#### NFR4: Usability
+
+* The API must be simple, with clear JSON request and response schemas.  
+* Error messages in logs must be detailed and directly reflect the output from the underlying tools to aid agent debugging.
+
+#### NFR4.1: Timestamp Standards
+
+* **UTC Only:** All timestamps in the system (logs, metrics, API responses, job status) must use UTC timezone exclusively. This ensures consistency across different deployment environments and eliminates timezone confusion in distributed systems.
+* **ISO 8601 Format:** All timestamp fields must use ISO 8601 format (`YYYY-MM-DDTHH:MM:SS.sssZ`) for standardization and interoperability.
+* **Phase Timing:** Job metrics must include detailed phase timestamps (`job_start`, `build_start`, `build_end`, `test_start`, `test_end`, `publish_start`, `publish_end`, `job_end`) to enable performance analysis and debugging.
+
+#### NFR5: Scalability
+
+* **Stateless Server:** The Go server must be stateless, with all job state managed by Nomad. This allows the server to be deployed as a replicated service job in Nomad for high availability and horizontal scaling.  
+* **Artifact Storage:** Larger artifacts required for builds or tests should be stored in an external system like S3, with smaller configuration details or state references stored in Consul if necessary.
+
+#### NFR6: Compatibility
+
+* **Go:** Version 1.22+  
+* **Nomad:** Version 1.10+ (with Vault integration enabled)  
+* **Buildah:** Latest stable version (`quay.io/buildah/stable`)  
+
+#### NFR7: Container Requirements
+
+* **Buildah Configuration:** Nomad job template must include:
+  * User namespace mappings: `user = "build:10000:65536"`
+  * Fuse device access: `device "/dev/fuse"`  
+  * Storage configuration: mount persistent volume to `/var/lib/containers`
+  * Isolation mode: `BUILDAH_ISOLATION=chroot`
+  * Privilege escalation: `allow_privilege_escalation = true` for rootless mode
+* **Build Caching:** Host volume for layer caching: `/opt/nomad/data/buildah-cache:/var/lib/containers`
+* **Setup Documentation:** Complete instructions for configuring Nomad clients with required capabilities and volume access.
+
+#### NFR8: Configuration Management
+
+* **Service Configuration:** Via Consul KV store at `jobforge-service/config/`
+* **Secrets Management:** Exclusively via Vault at paths like `nomad/jobs/<service>-secrets`  
+* **Environment Injection:** Support consul-template pattern for dynamic configuration
+* **Configuration Keys:**
+  * `default_resource_limits`: CPU/memory limits for jobs
+  * `build_timeout`: Maximum build duration (default: 30 minutes)
+  * `test_timeout`: Maximum test duration (default: 15 minutes)
+  * `registry_config`: Default registry settings
+
+## 4. Technical Stack
+
+* **Language:** Golang  
+* **Key Libraries:**  
+  * Nomad API: `github.com/hashicorp/nomad/api`  
+  * Configuration: `github.com/hashicorp/consul/api`  
+  * Secrets: `github.com/hashicorp/vault/api`  
+  * Metrics: `github.com/prometheus/client_golang`  
+  * Logging: `github.com/sirupsen/logrus`  
+  * HTTP/WebSockets: Standard `net/http` or `gorilla/websocket`  
+* **Deployment:** The service itself will be deployed as a Dockerized application running as a Nomad service job, exposing its API port.  
+* **Testing:** Unit tests for API handlers and integration tests using a mocked Nomad API.
+
+## 5. Architecture
+
+### 5.1 Components
+* **API Server:** A stateless Go application listening for agent requests. It acts as a control plane, translating API requests into Nomad API calls.  
+* **Nomad Client:** Integrated into the Go application to communicate with the Nomad cluster API.  
+* **Build/Test/Push Jobs:** Ephemeral Nomad batch jobs that execute the different phases.
+
+### 5.2 Phase Implementation Details
+
+#### Build Phase
+* **Technology:** Uses Buildah in `quay.io/buildah/stable` container
+* **Execution:** Single Nomad batch job that:
+  1. Clones Git repository using provided credentials
+  2. Builds Docker image using `buildah bud` with layer caching
+  3. Pushes temporary image to registry as `<registry>/temp/<job-id>:latest`
+* **Caching:** Mounts persistent volume `/opt/nomad/data/buildah-cache` for layer caching
+
+#### Test Phase (New Architecture)
+* **Technology:** Uses Nomad's native Docker driver directly
+* **Custom Commands Mode:** For each test command in `test_commands`:
+  * Creates separate Nomad batch job with Docker driver
+  * Job config: `{"image": "<temp-image>", "command": "sh", "args": ["-c", "<test-command>"]}`
+  * Runs test command inside the built image as a native Docker container
+* **Entry Point Mode:** If `test_entry_point` is true:
+  * Creates single Nomad batch job with Docker driver  
+  * Job config: `{"image": "<temp-image>"}` (no command - uses image's ENTRYPOINT/CMD)
+  * Tests the image's default execution behavior
+* **Benefits:**
+  * Eliminates buildah complexity in test phase
+  * Leverages Nomad's native Docker driver and log collection
+  * Supports parallel test execution (multiple test jobs can run simultaneously)
+  * Better resource isolation per test
+  * Cleaner, native log collection
+
+#### Publish Phase
+* **Technology:** Uses Buildah in `quay.io/buildah/stable` container
+* **Execution:** Single Nomad batch job that:
+  1. Pulls temporary image from registry
+  2. Retags image for each specified tag in `image_tags`
+  3. Pushes final images to target registry using `buildah push`
+
+### 5.3 Data Flow
+1. Agent sends a `submitJob` request via API to the server.  
+2. The server validates the request and submits a "build" job to the Nomad API.  
+3. Upon successful completion of the build job, multiple "test" jobs are submitted (one per test command or one for entry point testing).
+4. Upon successful completion of ALL test jobs, a "publish" job to the docker registry is submitted.  
+5. The agent can poll for status or receive real-time updates and request logs for any phase at any time.  
+
+### 5.4 Job Atomicity
+The server orchestrates the sequence of jobs. If any job in the sequence fails, the orchestration stops, and the overall job ID is marked as `FAILED`. The build-test-publish workflow is treated as a single atomic operation.
+
+## 6. Assumptions and Dependencies
+
+* A running Nomad cluster is available and configured with the Docker driver.  
+* Nomad clients have access to the persistent volume path for Buildah caching.  
+* For GPU-dependent builds, relevant Nomad clients are configured with the necessary GPU drivers and device plugins.  
+* Nomad is integrated with Vault for secret management.
+
+## 7. Risks and Mitigations
+
+* **Risk:** Nomad API rate limiting under heavy load.  
+  * **Mitigation:**None  
+* **Risk:** Long-running or stuck jobs.  
+  * **Mitigation:** Configure aggressive timeouts on all Nomad batch jobs to prevent them from consuming resources indefinitely. Allow override in the Job description for long jobs.
+
+## 8. Success Metrics
+
+* Demonstrated ability of a test agent to successfully submit a job, receive logs from a failed build, and use those logs to trigger a corrected build.  
+  * For example build and execute the hello-world docker image https://hub.docker.com/_/hello-world

@@ -90,6 +90,22 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 	jobID := uuid.New().String()
 	now := time.Now()
 
+	// Always include job-id as a tag for traceability
+	if len(jobConfig.ImageTags) == 0 {
+		// No tags provided, use only job-id
+		jobConfig.ImageTags = []string{jobID}
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": jobID,
+		}).Info("No image_tags provided, using job-id as tag")
+	} else {
+		// Tags provided, prepend job-id for traceability
+		jobConfig.ImageTags = append([]string{jobID}, jobConfig.ImageTags...)
+		nc.logger.WithFields(logrus.Fields{
+			"job_id": jobID,
+			"custom_tags": jobConfig.ImageTags[1:],
+		}).Info("Prepending job-id to custom image tags for traceability")
+	}
+
 	job := &types.Job{
 		ID:        jobID,
 		Config:    *jobConfig,

@@ -1,12 +1,17 @@
-# Nomad Build Service
+# Job Forge
 
-A lightweight, stateless, MCP-based server written in Go that enables coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure.
+A lightweight build automation system consisting of:
+- ** Build Server**: Stateless Go server providing JSON-RPC over HTTP interface
+- **CLI Tool**: Command-line client with YAML configuration support and version management
+
+The system enables users and coding agents to submit Docker image build jobs remotely using Nomad as the backend infrastructure.
 
 ## Features
 
-- **MCP Protocol Support**: Full compliance with Model Context Protocol for agent communication
+- **REST Protocol Support**: JSON-RPC over HTTP for agent communication
+- **CLI Tool**: User-friendly command-line interface with YAML configuration
+- **Semantic Versioning**: Automatic patch incrementing with branch-aware tagging
 - **Three-Phase Build Pipeline**: Build → Test → Publish workflow orchestration
-- **WebSocket Log Streaming**: Real-time log access during builds
 - **Rootless Buildah Integration**: Secure, daemonless container building
 - **Private Registry Workflow**: Intermediate image handling via private registries
 - **Consul/Vault Integration**: Configuration and secret management
@@ -16,9 +21,17 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 ## Architecture
 
 ```
+
+┌─────────────┐
+│   Agent     │
+│             │
+└─────────────┘
+      │
+      ▼
+
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Agent     │───▶│ MCP Server  │───▶│   Nomad     │
-│             │    │             │    │  Cluster    │
+│   CLI       │───▶│   Build     │───▶│   Nomad     │
+│             │    │   Server    │    │  Cluster    │
 └─────────────┘    └─────────────┘    └─────────────┘
                            │                   │
                            ▼                   ▼
@@ -36,40 +49,56 @@ A lightweight, stateless, MCP-based server written in Go that enables coding age
 
 ## API Endpoints
 
-The service provides **two distinct API types** with multiple transport options:
+The service provides two ways to interact with it:
 
-### 1. MCP Protocol Endpoints (Agent/Tool Integration)
+### 1. CLI Tool (Recommended)
 
-The **Model Context Protocol (MCP)** is used for agent communication. This service supports **three MCP transport methods**:
+The `jobforge` CLI tool provides the easiest way to interact with the build service:
 
-#### a) Simple JSON-RPC over HTTP (Standard)
-- **Endpoint:** `/mcp`
-- **Transport:** Single request/response, standard JSON-RPC 2.0
-- **Use with:** MCP Inspector, most MCP clients, testing
-- **Connection:** `http://localhost:8080/mcp`
-- **Best for:** Simple integrations, debugging, MCP Inspector
+```bash
+# Submit a build job with YAML configuration (simple)
+jobforge submit-job build.yaml
 
-#### b) Streamable HTTP Transport (Modern)
-- **Endpoint:** `/stream`
-- **Transport:** Bidirectional HTTP streaming with chunked encoding
-- **Spec:** MCP 2025-03-26
-- **Use with:** Advanced MCP clients supporting streaming
-- **Connection:** `http://localhost:8080/stream`
-- **Best for:** High-performance streaming applications
+# Submit with global config + per-build override
+jobforge submit-job -global deploy/global.yaml build.yaml
 
-#### c) SSE Transport (Legacy)
-- **Endpoint:** `/sse`
-- **Transport:** Server-Sent Events (GET) + JSON-RPC (POST)
-- **Spec:** MCP 2024-11-05
-- **Use with:** Older MCP clients, mcp-cli
-- **Connection:** `http://localhost:8080/sse`
-- **Best for:** Backward compatibility
+# Add additional image tags
+jobforge submit-job build.yaml --image-tags "v1.0.0,latest"
 
-**All three endpoints support the same MCP tools:** `submitJob`, `getStatus`, `getLogs`, `killJob`, `cleanup`, `getHistory`
+# Read config from stdin
+cat build.yaml | jobforge submit-job
 
-### 2. Custom JSON-RPC API (Non-MCP Protocol)
+# Query job status and logs
+jobforge get-status <job-id>
+jobforge get-logs <job-id> [phase]
 
-Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integrations:
+# Job management
+jobforge kill-job <job-id>
+jobforge cleanup <job-id>
+jobforge get-history [limit] [offset]
+
+# Version management
+jobforge version-info           # Show current version and branch
+jobforge version-major <ver>    # Set major version (resets minor/patch to 0)
+jobforge version-minor <ver>    # Set minor version (resets patch to 0)
+```
+
+**Key Features:**
+- **YAML Configuration**: Support for global config + per-build overrides
+- **Automatic Versioning**: Auto-increments patch version on each build
+- **Branch-Aware Tags**: Generates tags like `feature-auth-v0.1.5`
+- **Simple Interface**: No need to manually construct JSON-RPC requests
+
+### 2. Service Protocol Endpoint (Agent/Tool Integration)
+
+The endpoint is used for agent communication:
+
+- **Endpoint:** `/json`
+- **Transport:** JSON-RPC 2.0 over HTTP
+
+### 3. Direct JSON-RPC API (Testing/Debugging)
+
+Direct HTTP/JSON endpoints for testing and non-MCP integrations:
 - `POST /json/submitJob` - Submit build jobs
 - `POST /json/getStatus` - Get job status
 - `POST /json/getLogs` - Get job logs
@@ -80,7 +109,6 @@ Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integratio
 - `POST /json/getHistory` - Get job history
 - `GET /json/streamLogs?job_id=<id>` - WebSocket log streaming
 
-**Important:** The `/json/*` endpoints are **NOT** part of the MCP protocol - they are custom HTTP endpoints for direct integration and testing.
 
 ### 3. Health & Monitoring
 
@@ -90,25 +118,8 @@ Direct HTTP/JSON endpoints for **human-readable** testing and non-MCP integratio
 
 ### Connection Examples
 
-**MCP Inspector (Recommended):**
-```
-URL: http://localhost:8080/mcp
-Transport: Simple JSON-RPC
-```
 
-**Advanced MCP Clients (Streaming):**
-```
-URL: http://localhost:8080/stream
-Transport: Streamable HTTP
-```
-
-**Legacy MCP Clients:**
-```
-URL: http://localhost:8080/sse
-Transport: Server-Sent Events
-```
-
-**Direct HTTP/curl (Non-MCP):**
+**Direct HTTP/curl:**
 ```bash
 curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
@@ -136,7 +147,7 @@ curl http://localhost:8080/health
    git clone <repository-url>
    cd nomad-mcp-builder
    go mod tidy
-   go build -o nomad-build-service ./cmd/server
+   go build -o jobforge-service ./cmd/server
    ```
 
 2. **Configuration**
@@ -172,12 +183,65 @@ curl http://localhost:8080/health
 
 3. **Run the Service**
    ```bash
-   ./nomad-build-service
+   ./jobforge-service
    ```
 
 ## Configuration
 
-### Environment Variables
+### CLI YAML Configuration
+
+The CLI tool supports YAML job configurations with a two-file approach:
+
+#### Global Configuration (`deploy/global.yaml`)
+
+Shared settings across all builds:
+
+```yaml
+owner: myteam
+repo_url: https://github.com/myorg/myservice.git
+git_credentials_path: secret/nomad/jobs/git-credentials
+dockerfile_path: Dockerfile
+image_name: myservice
+registry_url: registry.cluster:5000/myapp
+registry_credentials_path: secret/nomad/jobs/registry-credentials
+```
+
+#### Per-Build Configuration (`build.yaml`)
+
+Build-specific overrides:
+
+```yaml
+git_ref: feature/new-feature
+image_tags:
+  - test
+  - dev
+test_entry_point: true
+```
+
+#### Merging Behavior
+
+- Per-build values **override** global values for any non-zero field
+- Arrays (like `image_tags`) are completely replaced, not merged
+- The CLI automatically increments patch version and adds branch-aware tag
+
+#### Usage
+
+```bash
+# Simple: config file as positional argument (recommended)
+jobforge submit-job build.yaml
+
+# With global config (recommended for teams)
+jobforge submit-job -global deploy/global.yaml build.yaml
+
+# Add extra tags in addition to auto-generated version tag
+jobforge submit-job build.yaml --image-tags "latest,stable"
+
+# Read config from stdin
+cat build.yaml | jobforge submit-job
+```
+
+
+### Server Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -198,18 +262,18 @@ curl http://localhost:8080/health
 | `REGISTRY_USERNAME` | _(empty)_ | Registry username (optional for public registries) |
 | `REGISTRY_PASSWORD` | _(empty)_ | Registry password (optional for public registries) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
-| `MCP_LOG_LEVEL` | `0` | MCP protocol verbose logging: `0`=compact (default), `1`=verbose with full request/response JSON |
+
 
 ### Consul Configuration
 
-The service stores configuration in Consul KV at `nomad-build-service/config/`:
+The service stores configuration in Consul KV at `jobforge-service/config/`:
 
 ```bash
-consul kv put nomad-build-service/config/build_timeout "45m"
-consul kv put nomad-build-service/config/test_timeout "20m"
-consul kv put nomad-build-service/config/default_resource_limits/cpu "1000"
-consul kv put nomad-build-service/config/default_resource_limits/memory "2048"
-consul kv put nomad-build-service/config/default_resource_limits/disk "10240"
+consul kv put jobforge-service/config/build_timeout "45m"
+consul kv put jobforge-service/config/test_timeout "20m"
+consul kv put jobforge-service/config/default_resource_limits/cpu "1000"
+consul kv put jobforge-service/config/default_resource_limits/memory "2048"
+consul kv put jobforge-service/config/default_resource_limits/disk "10240"
 ```
 
 ### Vault Secrets
@@ -296,22 +360,22 @@ plugin "docker" {
 
 ## Command Line Tool
 
-The project includes a `nomad-build` CLI tool that provides the same functionality as the web API in a convenient command-line interface.
+The project includes a `jobforge` CLI tool that provides the same functionality as the web API in a convenient command-line interface.
 
 ### Building the CLI Tool
 
 ```bash
 # Build the CLI tool
-go build -o nomad-build ./cmd/nomad-build
+go build -o jobforge ./cmd/jobforge
 ```
 
 ### CLI Usage
 
 ```
-nomad-build - CLI client for nomad build service
+jobforge - CLI client for nomad build service
 
 Usage:
-  nomad-build [flags] <command> [args...]
+  jobforge [flags] <command> [args...]
 
 Commands:
   submit-job <json>     Submit a new build job (JSON from arg or stdin)
@@ -324,7 +388,7 @@ Commands:
 Flags:
   -h, --help           Show this help message
   -u, --url <url>      Service URL (default: http://localhost:8080)
-                       Can also be set via NOMAD_BUILD_URL environment variable
+                       Can also be set via JOB_SERVICE_URL environment variable
 ```
 
 ### CLI Examples
@@ -333,7 +397,7 @@ Flags:
 
 **From command line argument:**
 ```bash
-nomad-build submit-job '{
+jobforge submit-job '{
   "owner": "myorg",
   "repo_url": "https://github.com/myorg/myapp.git",
   "git_ref": "main",
@@ -355,55 +419,55 @@ echo '{
   "image_name": "myapp",
   "image_tags": ["v1.0"],
   "registry_url": "registry.cluster:5000/myapp"
-}' | nomad-build submit-job
+}' | jobforge submit-job
 ```
 
 **From file:**
 ```bash
-cat job-config.json | nomad-build submit-job
+cat job-config.json | jobforge submit-job
 ```
 
 #### Check Job Status
 
 ```bash
-nomad-build get-status abc123-def456-789
+jobforge get-status abc123-def456-789
 ```
 
 #### Get Job Logs
 
 ```bash
 # Get all logs
-nomad-build get-logs abc123-def456-789
+jobforge get-logs abc123-def456-789
 
 # Get logs for specific phase
-nomad-build get-logs abc123-def456-789 build
-nomad-build get-logs abc123-def456-789 test
-nomad-build get-logs abc123-def456-789 publish
+jobforge get-logs abc123-def456-789 build
+jobforge get-logs abc123-def456-789 test
+jobforge get-logs abc123-def456-789 publish
 ```
 
 #### Kill a Running Job
 
 ```bash
-nomad-build kill-job abc123-def456-789
+jobforge kill-job abc123-def456-789
 ```
 
 #### Clean Up Job Resources
 
 ```bash
-nomad-build cleanup abc123-def456-789
+jobforge cleanup abc123-def456-789
 ```
 
 #### Get Job History
 
 ```bash
 # Get last 10 jobs
-nomad-build get-history
+jobforge get-history
 
 # Get specific number of jobs
-nomad-build get-history 20
+jobforge get-history 20
 
 # Get jobs with offset (pagination)
-nomad-build get-history 10 20
+jobforge get-history 10 20
 ```
 
 ### Service Discovery Integration
@@ -412,14 +476,14 @@ The CLI tool automatically works with service discovery:
 
 ```bash
 # Using Consul service discovery
-consul catalog service nomad-build-service
+consul catalog service jobforge-service
 # Service Address: 10.0.1.13:21855
 
 # Set environment variable for convenience
-export NOMAD_BUILD_URL=http://10.0.1.13:21855
+export JOB_SERVICE_URL=http://10.0.1.13:21855
 
 # Now all CLI commands will use the discovered service
-nomad-build get-history
+jobforge get-history
 ```
 
 ### CLI Integration Examples
@@ -431,15 +495,15 @@ nomad-build get-history
 # Build and deploy script
 
 # Set service URL from environment
-export NOMAD_BUILD_URL=${BUILD_SERVICE_URL}
+export JOB_SERVICE_URL=${BUILD_SERVICE_URL}
 
 # Submit job from JSON file
-JOB_ID=$(cat build-config.json | nomad-build submit-job | jq -r '.job_id')
+JOB_ID=$(cat build-config.json | jobforge submit-job | jq -r '.job_id')
 echo "Build job submitted: $JOB_ID"
 
 # Wait for completion
 while true; do
-  STATUS=$(nomad-build get-status $JOB_ID | jq -r '.status')
+  STATUS=$(jobforge get-status $JOB_ID | jq -r '.status')
   echo "Current status: $STATUS"
 
   if [[ "$STATUS" == "SUCCEEDED" ]]; then
@@ -447,7 +511,7 @@ while true; do
     break
   elif [[ "$STATUS" == "FAILED" ]]; then
     echo "Build failed! Getting logs..."
-    nomad-build get-logs $JOB_ID
+    jobforge get-logs $JOB_ID
     exit 1
   fi
 
@@ -455,7 +519,7 @@ while true; do
 done
 
 # Clean up
-nomad-build cleanup $JOB_ID
+jobforge cleanup $JOB_ID
 ```
 
 #### Monitoring Script
@@ -464,13 +528,13 @@ nomad-build cleanup $JOB_ID
 #!/bin/bash
 # Monitor build service
 
-export NOMAD_BUILD_URL=http://10.0.1.13:21855
+export JOB_SERVICE_URL=http://10.0.1.13:21855
 
 echo "Recent build history:"
-nomad-build get-history 5
+jobforge get-history 5
 
 echo -e "\nRunning jobs:"
-nomad-build get-history 20 | jq '.jobs[] | select(.status == "BUILDING" or .status == "TESTING" or .status == "PUBLISHING") | {id: .id, status: .status, owner: .config.owner}'
+jobforge get-history 20 | jq '.jobs[] | select(.status == "BUILDING" or .status == "TESTING" or .status == "PUBLISHING") | {id: .id, status: .status, owner: .config.owner}'
 ```
 
 ### Go Library Usage
@@ -686,6 +750,8 @@ This allows fine-grained control where resource-intensive build phases can have 
 
 **Note**: The `image_name` field is now **required** and specifies the name of the Docker image (e.g., "myapp", "web-server"). The final image will be tagged as `registry_url/image_name:tag`.
 
+**Image Tags**: The `image_tags` field is **optional**. The job-id is **always included as the first tag** for complete traceability. If you specify additional tags, they are appended after the job-id. This ensures every build has a unique, traceable tag while allowing custom tags like "latest" or version numbers.
+
 ```bash
 curl -X POST http://localhost:8080/json/submitJob \
   -H "Content-Type: application/json" \
@@ -730,47 +796,6 @@ ws.onmessage = function(event) {
 };
 ```
 
-## Testing with MCP Inspector
-
-You can test the MCP endpoints using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
-
-1. **Start your build service:**
-   ```bash
-   ./nomad-build-service
-   ```
-
-2. **Open MCP Inspector** in your browser
-
-3. **Connect to the service:**
-   - **URL:** `http://localhost:8080/mcp`
-   - **Transport:** Simple JSON-RPC (recommended for Inspector)
-
-   **Alternative:** For streaming support, use `http://localhost:8080/stream`
-
-4. **Available MCP Tools:**
-   - `submitJob` - Submit a new build job
-   - `getStatus` - Check job status  
-   - `getLogs` - Retrieve job logs
-   - `killJob` - Terminate a running job
-   - `cleanup` - Clean up job resources
-   - `getHistory` - Get build history
-   - `purgeFailedJob` - Remove zombie/dead jobs from Nomad
-
-5. **Example MCP Tool Call:**
-   ```json
-   {
-     "name": "submitJob",
-     "arguments": {
-       "repo_url": "https://github.com/example/repo.git",
-       "image_name": "myapp",
-       "registry_url": "registry.example.com",
-       "image_tags": ["latest", "v1.0.0"],
-       "test_commands": ["npm test", "npm run lint"]
-     }
-   }
-   ```
-
-The MCP Inspector will show you the available tools, their schemas, and allow you to test tool calls interactively.
 
 ## Monitoring
 
@@ -808,28 +833,28 @@ First, build and push a Docker image:
 
 ```bash
 # Build the binary
-go build -o nomad-build-service ./cmd/server
+go build -o jobforge-service ./cmd/server
 
 # Create Dockerfile (example)
 cat > Dockerfile << 'EOF'
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
-COPY nomad-build-service .
+COPY jobforge-service .
 EXPOSE 8080 9090
-CMD ["./nomad-build-service"]
+CMD ["./jobforge-service"]
 EOF
 
 # Build and push image
-docker build -t your-registry:5000/nomad-build-service:latest .
-docker push your-registry:5000/nomad-build-service:latest
+docker build -t your-registry:5000/jobforge-service:latest .
+docker push your-registry:5000/jobforge-service:latest
 ```
 
 ### Deploying with Nomad
 
 1. **Update the job file variables**:
    ```bash
-   # Edit nomad-build-service.nomad and update:
+   # Edit jobforge-service.nomad and update:
    # - datacenters = ["your-datacenter"] 
    # - region = "your-region"
    # - REGISTRY_URL in env section
@@ -843,13 +868,13 @@ docker push your-registry:5000/nomad-build-service:latest
 3. **Deploy to Nomad**:
    ```bash
    # Plan the deployment
-   nomad job plan nomad-build-service.nomad
+   nomad job plan jobforge-service.nomad
    
    # Deploy the service
-   nomad job run nomad-build-service.nomad
+   nomad job run jobforge-service.nomad
    
    # Check status
-   nomad job status nomad-build-service
+   nomad job status jobforge-service
    ```
 
 4. **Verify service registration**:
@@ -858,17 +883,17 @@ docker push your-registry:5000/nomad-build-service:latest
    consul catalog services
    
    # Check specific service
-   consul catalog service nomad-build-service
-   consul catalog service nomad-build-service-metrics
+   consul catalog service jobforge-service
+   consul catalog service jobforge-service-metrics
    ```
 
 5. **Configure Prometheus** to discover the service:
    ```yaml
    scrape_configs:
-     - job_name: 'nomad-build-service'
+     - job_name: 'jobforge-service'
        consul_sd_configs:
          - server: 'your-consul:8500'
-           services: ['nomad-build-service-metrics']
+           services: ['jobforge-service-metrics']
        relabel_configs:
          - source_labels: [__meta_consul_service_metadata_metrics_path]
            target_label: __metrics_path__
@@ -886,11 +911,11 @@ Once deployed, the service will be available at:
 
 To scale the service:
 ```bash
-# Update count in nomad-build-service.nomad
+# Update count in jobforge-service.nomad
 count = 3
 
 # Redeploy
-nomad job run nomad-build-service.nomad
+nomad job run jobforge-service.nomad
 ```
 
 ## Development
@@ -914,7 +939,7 @@ go run ./cmd/server
 ### Building Docker Image
 
 ```bash
-docker build -t nomad-build-service:latest .
+docker build -t jobforge-service:latest .
 ```
 
 ## Troubleshooting
@@ -941,7 +966,7 @@ docker build -t nomad-build-service:latest .
 Enable debug logging:
 ```bash
 export LOG_LEVEL=debug
-./nomad-build-service
+./jobforge-service
 ```
 
 #### MCP Protocol Verbose Logging
@@ -950,7 +975,7 @@ For debugging MCP protocol communication issues, enable verbose logging to captu
 
 ```bash
 export MCP_LOG_LEVEL=1
-./nomad-build-service
+./jobforge-service
 ```
 
 **Log Levels:**
@@ -1001,7 +1026,7 @@ The project includes comprehensive integration tests that:
 #### Running Integration Tests
 
 **Prerequisites:**
-- Nomad cluster running with the nomad-build-service deployed
+- Nomad cluster running with the jobforge-service deployed
 - Consul accessible for service discovery
 - Registry accessible at `registry.cluster:5000`
 
@@ -1043,10 +1068,10 @@ You can also test manually after discovering the service:
 
 ```bash
 # Discover service URL
-consul catalog service nomad-build-service
+consul catalog service jobforge-service
 
 # Or use Consul API to get the service endpoint
-SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/nomad-build-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
+SERVICE_URL=$(curl -s http://${CONSUL_HTTP_ADDR:-localhost:8500}/v1/catalog/service/jobforge-service | jq -r '.[0] | "\(.ServiceAddress):\(.ServicePort)"')
 
 # Submit test job (replace with discovered URL or use SERVICE_URL)
 curl -X POST http://${SERVICE_URL:-localhost:8080}/json/submitJob \
@@ -1078,6 +1103,119 @@ The integration test is configurable via environment variables:
 - `CONSUL_HTTP_ADDR` - Consul address (default: `10.0.1.12:8500`)
 - Test timeout is set to 15 minutes to allow for complete build cycles
 
+### Webhook Integration Tests
+
+The project includes webhook notification tests that verify the complete webhook delivery system. These tests are **opt-in** due to network requirements.
+
+#### Network Requirements
+
+Webhook tests require bidirectional network connectivity:
+- The test creates a local webhook receiver
+- The Nomad cluster must be able to reach the test machine's IP
+- Works automatically with VPN setups (e.g., WireGuard, OpenVPN)
+
+#### Running Webhook Tests
+
+```bash
+# Enable webhook tests (auto-detects correct network interface)
+ENABLE_WEBHOOK_TESTS=true go test ./test/integration -v -run TestWebhookNotifications
+
+# Override IP selection if auto-detection fails
+ENABLE_WEBHOOK_TESTS=true WEBHOOK_TEST_IP=10.0.6.17 go test ./test/integration -v -run TestWebhookNotifications
+```
+
+#### How IP Selection Works
+
+The test intelligently selects the correct network interface using a 3-strategy approach:
+
+1. **Environment Override** (highest priority):
+   ```bash
+   export WEBHOOK_TEST_IP=10.0.6.17
+   ```
+
+2. **Auto-Detection** (recommended):
+   - Dials the discovered service URL
+   - Uses the local interface that can reach the service
+   - Example: Service at `10.0.1.16` → Selects VPN interface `10.0.6.17`
+
+3. **Network Scan Fallback**:
+   - Searches for interfaces in `10.0.x.x` range
+   - Useful for cluster network setups
+
+4. **Default Route Fallback**:
+   - Uses default route if all else fails
+
+#### Example Network Setup
+
+**Typical VPN Configuration:**
+```
+Developer Machine:
+├─ WiFi: 192.168.0.149 (home network)
+├─ VPN:  10.0.6.17 (WireGuard - cluster access)
+└─ Docker: 172.17.0.1 (local)
+
+Nomad Cluster: 10.0.1.x network
+
+Webhook Test Flow:
+Service (10.0.1.16) → VPN Bridge → Test Receiver (10.0.6.17:8889)
+```
+
+#### What the Test Validates
+
+The webhook test verifies:
+- ✅ Webhook receiver starts and binds correctly
+- ✅ Build job submission with webhook configuration
+- ✅ Webhook delivery for all job phases (build/test/publish)
+- ✅ HMAC-SHA256 signature authentication
+- ✅ Custom header propagation
+- ✅ Job completion notification
+- ✅ Proper error handling and retries
+
+#### Troubleshooting Webhook Tests
+
+**Test skips immediately:**
+```bash
+# Make sure to enable the test
+ENABLE_WEBHOOK_TESTS=true go test ./test/integration -run TestWebhookNotifications
+```
+
+**Webhooks not received (check server logs):**
+```bash
+# View webhook delivery attempts
+nomad alloc logs -stderr <alloc-id> | grep -i webhook
+
+# Look for "context deadline exceeded" errors
+# This indicates network connectivity issues
+```
+
+**Wrong IP selected:**
+```bash
+# Check available interfaces
+ip addr
+
+# Manually specify the correct IP
+WEBHOOK_TEST_IP=10.0.6.17 ENABLE_WEBHOOK_TESTS=true go test ./test/integration -run TestWebhookNotifications
+```
+
+**Network Connectivity Test:**
+```bash
+# From your machine, verify you can reach the cluster
+ping 10.0.1.16
+
+# From the cluster, verify it can reach your machine (if possible)
+# The webhook test will show selected IP in its output
+```
+
+#### Why Webhook Tests Are Opt-In
+
+Webhook tests are disabled by default because:
+- They require network accessibility from the Nomad cluster
+- They depend on VPN or network bridge configuration
+- They take longer to run (15-20 seconds)
+- Most development workflows don't require webhook testing
+
+For CI/CD environments with proper network setup, enable them in your pipeline configuration.
+
 ## Contributing
 
 1. Fork the repository
@@ -1088,7 +1226,7 @@ The integration test is configurable via environment variables:
 
 ## License
 
-[Specify License]
+MIT
 
 ## Support
 

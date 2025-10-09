@@ -1,0 +1,8 @@
+owner: test-team
+repo_url: https://github.com/geraldthewes/docker-build-hello-world 
+git_ref: main      
+dockerfile_path: Dockerfile
+image_name: hello-world
+image_tags: ["latest"]
+registry_url: registry.cluster:5000
+test_entry_point: true

@@ -132,7 +132,7 @@ echo "User namespace setup completed"
 Create Vault policies for the service:
 
 ```hcl
-# nomad-build-service-policy.hcl
+# jobforge-service-policy.hcl
 path "secret/data/nomad/jobs/*" {
   capabilities = ["read"]
 }
@@ -152,7 +152,7 @@ path "auth/token/revoke-self" {
 
 Apply the policy:
 ```bash
-vault policy write nomad-build-service nomad-build-service-policy.hcl
+vault policy write jobforge-service jobforge-service-policy.hcl
 ```
 
 #### Secrets Setup
@@ -185,7 +185,7 @@ Set up Consul KV structure:
 # setup-consul-config.sh
 
 CONSUL_ADDR=${CONSUL_HTTP_ADDR:-localhost:8500}
-PREFIX="nomad-build-service"
+PREFIX="jobforge-service"
 
 # Default configuration
 consul kv put ${PREFIX}/config/build_timeout "30m"
@@ -208,8 +208,8 @@ echo "Consul configuration initialized"
 Deploy as a Nomad service job:
 
 ```hcl
-# nomad-build-service.nomad
-job "nomad-build-service" {
+# jobforge-service.nomad
+job "jobforge-service" {
   datacenters = ["cluster"]
   type = "service"
   
@@ -237,7 +237,7 @@ job "nomad-build-service" {
     }
 
     service {
-      name = "nomad-build-service"
+      name = "jobforge-service"
       port = "http"
       
       tags = [
@@ -255,7 +255,7 @@ job "nomad-build-service" {
     }
     
     service {
-      name = "nomad-build-service-metrics"
+      name = "jobforge-service-metrics"
       port = "metrics"
       
       tags = [
@@ -268,7 +268,7 @@ job "nomad-build-service" {
       driver = "docker"
       
       config {
-        image = "nomad-build-service:latest"
+        image = "jobforge-service:latest"
         ports = ["http", "metrics", "health"]
       }
       
@@ -292,7 +292,7 @@ job "nomad-build-service" {
       }
       
       vault {
-        policies = ["nomad-build-service"]
+        policies = ["jobforge-service"]
         change_mode = "restart"
       }
       
@@ -324,7 +324,7 @@ job "nomad-build-service" {
 
 Deploy the job:
 ```bash
-nomad job run nomad-build-service.nomad
+nomad job run jobforge-service.nomad
 ```
 
 ### Option 2: Docker Compose (Development)
@@ -334,8 +334,8 @@ nomad job run nomad-build-service.nomad
 version: '3.8'
 
 services:
-  nomad-build-service:
-    image: nomad-build-service:latest
+  jobforge-service:
+    image: jobforge-service:latest
     ports:
       - "8080:8080"
       - "9090:9090" 
@@ -384,22 +384,22 @@ services:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nomad-build-service
+  name: jobforge-service
   labels:
-    app: nomad-build-service
+    app: jobforge-service
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: nomad-build-service
+      app: jobforge-service
   template:
     metadata:
       labels:
-        app: nomad-build-service
+        app: jobforge-service
     spec:
       containers:
-      - name: nomad-build-service
-        image: nomad-build-service:latest
+      - name: jobforge-service
+        image: jobforge-service:latest
         ports:
         - containerPort: 8080
         - containerPort: 9090
@@ -429,10 +429,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: nomad-build-service
+  name: jobforge-service
 spec:
   selector:
-    app: nomad-build-service
+    app: jobforge-service
   ports:
   - name: http
     port: 8080
@@ -466,9 +466,9 @@ frontend build_service_frontend
 backend build_service_backend
     balance roundrobin
     option httpchk GET /health
-    server node1 nomad-build-service-1:8080 check
-    server node2 nomad-build-service-2:8080 check
-    server node3 nomad-build-service-3:8080 check
+    server node1 jobforge-service-1:8080 check
+    server node2 jobforge-service-2:8080 check
+    server node3 jobforge-service-3:8080 check
 
 frontend metrics_frontend
     bind *:9090
@@ -476,9 +476,9 @@ frontend metrics_frontend
 
 backend metrics_backend
     balance roundrobin
-    server node1 nomad-build-service-1:9090 check
-    server node2 nomad-build-service-2:9090 check
-    server node3 nomad-build-service-3:9090 check
+    server node1 jobforge-service-1:9090 check
+    server node2 jobforge-service-2:9090 check
+    server node3 jobforge-service-3:9090 check
 ```
 
 ### NGINX Example
@@ -487,15 +487,15 @@ backend metrics_backend
 # nginx.conf
 upstream build_service {
     least_conn;
-    server nomad-build-service-1:8080;
-    server nomad-build-service-2:8080;
-    server nomad-build-service-3:8080;
+    server jobforge-service-1:8080;
+    server jobforge-service-2:8080;
+    server jobforge-service-3:8080;
 }
 
 upstream metrics {
-    server nomad-build-service-1:9090;
-    server nomad-build-service-2:9090;
-    server nomad-build-service-3:9090;
+    server jobforge-service-1:9090;
+    server jobforge-service-2:9090;
+    server jobforge-service-3:9090;
 }
 
 server {
@@ -536,10 +536,10 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: 'nomad-build-service'
+  - job_name: 'jobforge-service'
     consul_sd_configs:
       - server: 'consul:8500'
-        services: ['nomad-build-service-metrics']
+        services: ['jobforge-service-metrics']
     scrape_interval: 30s
     metrics_path: '/metrics'
 
@@ -567,7 +567,7 @@ groups:
   - name: build_service_alerts
     rules:
       - alert: BuildServiceDown
-        expr: up{job="nomad-build-service"} == 0
+        expr: up{job="jobforge-service"} == 0
         for: 1m
         labels:
           severity: critical
@@ -637,19 +637,19 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o nomad-build-service ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o jobforge-service ./cmd/server
 
 FROM alpine:3.18
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
-COPY --from=builder /app/nomad-build-service .
+COPY --from=builder /app/jobforge-service .
 
 # Create non-root user
 RUN adduser -D -s /bin/sh buildservice
 USER buildservice
 
 EXPOSE 8080 9090 8081
-CMD ["./nomad-build-service"]
+CMD ["./jobforge-service"]
 ```
 
 ## Backup and Recovery
@@ -661,7 +661,7 @@ CMD ["./nomad-build-service"]
 # backup-consul.sh
 DATE=$(date +%Y%m%d_%H%M%S)
 consul snapshot save /backup/consul-${DATE}.snap
-consul kv export nomad-build-service/ > /backup/config-${DATE}.json
+consul kv export jobforge-service/ > /backup/config-${DATE}.json
 ```
 
 ### 2. Vault Backup
@@ -695,7 +695,7 @@ find /backup -name "config-*.json" -mtime +30 -delete
    ```bash
    # Check Consul services
    consul catalog services
-   consul health service nomad-build-service
+   consul health service jobforge-service
    ```
 
 2. **Vault Authentication**
@@ -708,7 +708,7 @@ find /backup -name "config-*.json" -mtime +30 -delete
 3. **Nomad Job Issues**
    ```bash
    # Check job status
-   nomad job status nomad-build-service
+   nomad job status jobforge-service
    nomad alloc logs <alloc-id>
    ```
 

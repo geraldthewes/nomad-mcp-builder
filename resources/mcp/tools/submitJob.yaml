@@ -9,7 +9,7 @@ description: |
 
 input_schema:
   type: "object"
-  required: ["owner", "repo_url", "image_name", "image_tags", "registry_url"]
+  required: ["owner", "repo_url", "image_name", "registry_url"]
   properties:
     owner:
       type: "string"
@@ -39,7 +39,7 @@ input_schema:
       description: "Base name for the Docker image"
 
     image_tags:
-      description: "List of image tags to apply. Can be an array of strings ['latest', 'v1.0'] or a JSON string '[\"latest\"]' for compatibility."
+      description: "Optional list of image tags to apply. Defaults to the job-id if not provided. Can be an array of strings ['latest', 'v1.0'] or a JSON string '[\"latest\"]' for compatibility."
       oneOf:
         - type: "array"
           items:
