@@ -38,6 +38,9 @@ type JobConfig struct {
 	WebhookOnSuccess        bool     `json:"webhook_on_success,omitempty" yaml:"webhook_on_success,omitempty"`       // Send webhook on successful builds (default: true)
 	WebhookOnFailure        bool     `json:"webhook_on_failure,omitempty" yaml:"webhook_on_failure,omitempty"`       // Send webhook on failed builds (default: true)
 	WebhookHeaders          map[string]string `json:"webhook_headers,omitempty" yaml:"webhook_headers,omitempty"`   // Optional custom headers
+
+	// Local build history configuration (CLI only)
+	DeployDir               string   `json:"deploy_dir,omitempty" yaml:"deploy_dir,omitempty"`                 // Directory for build history (default: "./deploy")
 }
 
 // PhaseResourceLimits defines resource constraints for a single phase

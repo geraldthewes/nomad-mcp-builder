@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"nomad-mcp-builder/pkg/client"
 	"nomad-mcp-builder/pkg/config"
 	"nomad-mcp-builder/pkg/consul"
+	"nomad-mcp-builder/pkg/history"
 	"nomad-mcp-builder/pkg/types"
 )
 
@@ -57,6 +60,12 @@ SUBMIT-JOB OPTIONS:
                             Displays status updates and exits when job completes
                             Requires Consul connection (default: localhost:8500)
 
+  --history                 Record build history locally
+                            Creates deploy/builds/<job-id>/ with metadata and logs
+                            When used alone: Records submission only (no final status)
+                            With --watch: Records complete build with logs and final status
+                            Deploy directory configurable via 'deploy_dir' in YAML (default: ./deploy)
+
 YAML CONFIGURATION:
   Global config (deploy/global.yaml) - Shared settings:
     owner: myteam
@@ -84,6 +93,12 @@ EXAMPLES:
 
     # Watch job progress in real-time (recommended for interactive use)
     jobforge submit-job build.yaml --watch
+
+    # Record build history (submission only, no final status)
+    jobforge submit-job build.yaml --history
+
+    # Record complete build history with logs (recommended)
+    jobforge submit-job build.yaml --history --watch
 
     # From stdin (YAML format)
     cat build.yaml | jobforge submit-job
@@ -228,12 +243,16 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	var perBuildConfigPath string
 	var configData string
 	var watch bool
+	var enableHistory bool
 
 	i := 0
 	for i < len(args) {
 		arg := args[i]
 		if arg == "--watch" || arg == "-w" {
 			watch = true
+			i++
+		} else if arg == "--history" {
+			enableHistory = true
 			i++
 		} else if arg == "--image-tags" {
 			if i+1 >= len(args) {
@@ -326,14 +345,57 @@ func handleSubmitJob(c *client.Client, args []string) error {
 	}
 
 	// Submit job
+	submissionTime := time.Now()
 	response, err := c.SubmitJob(jobConfig)
 	if err != nil {
 		return fmt.Errorf("failed to submit job: %w", err)
 	}
 
+	// Handle history recording if --history flag is set
+	var historyMgr *history.Manager
+	if enableHistory {
+		// Get deploy directory from config (default to "./deploy")
+		deployDir := jobConfig.DeployDir
+		if deployDir == "" {
+			deployDir = "./deploy"
+		}
+
+		// Create history manager
+		historyMgr, err = history.NewManager(deployDir)
+		if err != nil {
+			return fmt.Errorf("failed to create history manager: %w", err)
+		}
+
+		// Create build directory
+		if err := historyMgr.CreateBuildDirectory(response.JobID); err != nil {
+			return fmt.Errorf("failed to create build directory: %w", err)
+		}
+
+		// Write initial metadata
+		if err := historyMgr.WriteInitialMetadata(response.JobID, *jobConfig); err != nil {
+			return fmt.Errorf("failed to write initial metadata: %w", err)
+		}
+
+		// Add initial entry to history.md
+		entry := history.HistoryEntry{
+			JobID:     response.JobID,
+			Branch:    extractBranchFromConfig(*jobConfig),
+			GitRef:    jobConfig.GitRef,
+			Timestamp: submissionTime,
+			Status:    types.StatusPending,
+			ImageTags: jobConfig.ImageTags,
+		}
+		if err := historyMgr.UpdateHistoryFile(entry); err != nil {
+			// Log warning but don't fail
+			fmt.Fprintf(os.Stderr, "Warning: failed to update history file: %v\n", err)
+		}
+
+		fmt.Printf("History recorded to: %s\n", historyMgr.GetBuildDir(response.JobID))
+	}
+
 	// If --watch flag is set, watch the job progress instead of returning immediately
 	if watch {
-		return watchJobProgress(response.JobID, c.GetBaseURL())
+		return watchJobProgress(response.JobID, c.GetBaseURL(), historyMgr, submissionTime)
 	}
 
 	// Output response
@@ -344,6 +406,21 @@ func handleSubmitJob(c *client.Client, args []string) error {
 
 	fmt.Println(string(output))
 	return nil
+}
+
+// extractBranchFromConfig extracts branch from job config
+func extractBranchFromConfig(config types.JobConfig) string {
+	if config.GitRef == "" {
+		return "unknown"
+	}
+	// Handle common patterns
+	if strings.HasPrefix(config.GitRef, "refs/heads/") {
+		return strings.TrimPrefix(config.GitRef, "refs/heads/")
+	}
+	if strings.HasPrefix(config.GitRef, "refs/tags/") {
+		return strings.TrimPrefix(config.GitRef, "refs/tags/")
+	}
+	return config.GitRef
 }
 
 // parseConfigData parses config data as YAML
@@ -512,7 +589,8 @@ func handleHealth(c *client.Client, args []string) error {
 }
 
 // watchJobProgress watches a job's progress in real-time using Consul KV
-func watchJobProgress(jobID string, serviceURL string) error {
+// If historyMgr is provided, logs and final status are written to local history
+func watchJobProgress(jobID string, serviceURL string, historyMgr *history.Manager, submissionTime time.Time) error {
 	fmt.Printf("Watching job: %s\n", jobID)
 	fmt.Printf("Service URL: %s\n\n", serviceURL)
 
@@ -567,6 +645,16 @@ func watchJobProgress(jobID string, serviceURL string) error {
 			// Check if job reached terminal state
 			if update.Status == types.StatusSucceeded {
 				fmt.Printf("\n✅ Job completed successfully\n")
+
+				// Write complete history if history manager is available
+				if historyMgr != nil {
+					if err := writeCompleteHistory(jobID, serviceURL, historyMgr, submissionTime); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to write complete history: %v\n", err)
+					} else {
+						fmt.Printf("Complete history written to: %s\n", historyMgr.GetBuildDir(jobID))
+					}
+				}
+
 				return nil
 			} else if update.Status == types.StatusFailed {
 				fmt.Printf("\n❌ Job failed")
@@ -574,6 +662,16 @@ func watchJobProgress(jobID string, serviceURL string) error {
 					fmt.Printf(": %s", update.Error)
 				}
 				fmt.Println()
+
+				// Write complete history even on failure if history manager is available
+				if historyMgr != nil {
+					if err := writeCompleteHistory(jobID, serviceURL, historyMgr, submissionTime); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to write complete history: %v\n", err)
+					} else {
+						fmt.Printf("Complete history written to: %s\n", historyMgr.GetBuildDir(jobID))
+					}
+				}
+
 				return fmt.Errorf("job failed")
 			}
 
@@ -607,4 +705,114 @@ func getStatusSymbol(status types.JobStatus) string {
 	default:
 		return "❓"
 	}
+}
+
+// writeCompleteHistory fetches job details and logs from server and writes complete history
+func writeCompleteHistory(jobID string, serviceURL string, historyMgr *history.Manager, submissionTime time.Time) error {
+	// Create a client to fetch job details
+	c := client.NewClient(serviceURL)
+
+	// Fetch job status
+	statusResp, err := c.GetStatus(jobID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch job status: %w", err)
+	}
+
+	// Fetch logs for all phases
+	logsResp, err := c.GetLogs(jobID, "")
+	if err != nil {
+		return fmt.Errorf("failed to fetch job logs: %w", err)
+	}
+
+	// Construct a Job object for history writing
+	job := &types.Job{
+		ID:      jobID,
+		Status:  statusResp.Status,
+		Metrics: statusResp.Metrics,
+		Error:   statusResp.Error,
+		Logs:    logsResp.Logs,
+	}
+
+	// Set timing fields from metrics
+	job.StartedAt = statusResp.Metrics.JobStart
+	job.FinishedAt = statusResp.Metrics.JobEnd
+
+	// We need to fetch the job config - it's not in the status response
+	// For now, we'll create a minimal reconstruction
+	// In a real implementation, we might need to add an endpoint to fetch full job details
+	// For now, use empty config or try to reconstruct from available info
+	job.Config = types.JobConfig{}
+
+	// Write phase logs
+	if len(logsResp.Logs.Build) > 0 {
+		if err := historyMgr.WritePhaseLogs(jobID, "build", logsResp.Logs.Build); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write build logs: %v\n", err)
+		}
+	}
+	if len(logsResp.Logs.Test) > 0 {
+		if err := historyMgr.WritePhaseLogs(jobID, "test", logsResp.Logs.Test); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write test logs: %v\n", err)
+		}
+	}
+	if len(logsResp.Logs.Publish) > 0 {
+		if err := historyMgr.WritePhaseLogs(jobID, "publish", logsResp.Logs.Publish); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write publish logs: %v\n", err)
+		}
+	}
+
+	// Read the initial metadata to get the full job config
+	// This was written during submission
+	initialMetadata, err := readInitialMetadata(historyMgr.GetBuildDir(jobID))
+	if err == nil {
+		job.Config = initialMetadata.JobConfig
+	}
+
+	// Write complete metadata
+	if err := historyMgr.WriteCompleteMetadata(jobID, job, submissionTime); err != nil {
+		return fmt.Errorf("failed to write complete metadata: %w", err)
+	}
+
+	// Write status file
+	if err := historyMgr.WriteStatusFile(jobID, job); err != nil {
+		return fmt.Errorf("failed to write status file: %w", err)
+	}
+
+	// Update history.md with final entry
+	var duration time.Duration
+	if job.FinishedAt != nil && job.StartedAt != nil {
+		duration = job.FinishedAt.Sub(*job.StartedAt)
+	}
+
+	entry := history.HistoryEntry{
+		JobID:     jobID,
+		Branch:    extractBranchFromConfig(job.Config),
+		GitRef:    job.Config.GitRef,
+		Timestamp: submissionTime,
+		Status:    job.Status,
+		Duration:  duration,
+		ImageTags: job.Config.ImageTags,
+		Error:     job.Error,
+	}
+
+	if err := historyMgr.UpdateHistoryFile(entry); err != nil {
+		return fmt.Errorf("failed to update history file: %w", err)
+	}
+
+	return nil
+}
+
+// readInitialMetadata reads the initial metadata from the build directory
+func readInitialMetadata(buildDir string) (*history.InitialMetadata, error) {
+	metadataPath := filepath.Join(buildDir, "metadata.yaml")
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var metadata history.InitialMetadata
+	if err := yaml.Unmarshal(data, &metadata); err != nil {
+		return nil, err
+	}
+
+	return &metadata, nil
 }

@@ -214,25 +214,45 @@ jobforge cleanup <job-id>
 - Simpler for users to understand and use
 - job-id tag ensures no conflicts between concurrent builds
 
-#### FR4: CLI Local Build History Management (Optional)
+#### FR4: CLI Local Build History Management
 
-**Note**: This feature is optional and can be implemented in a future iteration if needed.
+**Implementation Status**: Active development
 
-**Deploy Directory Structure** (CLI could optionally create and manage in target repo):
+**Overview**:
+The CLI tool provides optional local build history management via the `--history` flag. When enabled, it creates a structured directory of build records in a configurable deploy directory. This feature supports two modes:
+- `--history` alone: Records initial build submission only (no final status or logs)
+- `--history --watch`: Full logging with final status, complete logs, and metrics
+
+**Configuration**:
+The deploy directory location is configurable via the `deploy_dir` field in the job configuration YAML:
+```yaml
+deploy_dir: "deploy"  # Default: "./deploy" (relative to CWD)
+```
+Both relative (resolved from CWD) and absolute paths are supported.
+
+**Deploy Directory Structure**:
 ```
 deploy/
 ├── global.yaml              # Global configuration
 ├── builds/                  # Per-build history
-│   ├── job-abc123/
-│   │   ├── status.md        # Summary: phases, status, duration
-│   │   ├── metadata.yaml    # Job config, timestamps, job-id
+│   ├── abc123def456/        # Directory named by job-id (not job-abc123)
+│   │   ├── status.md        # Summary: phases, status, duration, branch
+│   │   ├── metadata.yaml    # Job config, timestamps, job-id, branch
 │   │   ├── build.log        # Build phase logs (stdout + stderr)
 │   │   ├── test.log         # Test phase logs (if applicable)
 │   │   └── deploy.log       # Deploy phase logs (if applicable)
-│   ├── job-def456/
+│   ├── def456ghi789/
 │   │   └── ...
-└── history.md               # Chronological summary of all builds
+└── history.md               # Chronological summary (newest first, prepended)
 ```
+
+**Key Design Decisions**:
+1. **Directory Naming**: Use job-id directly (e.g., `abc123def456`), not `job-<job-id>`
+2. **Branch Tracking**: Branch/git_ref is clearly recorded in both metadata and history.md
+3. **History Ordering**: New entries are prepended to history.md (newest first) for easier browsing
+4. **Error Handling**: Directory creation failures cause the submit operation to fail with clear error messages
+5. **Git Commit**: Uses `git_ref` from config; no local commit hash resolution
+6. **Path Support**: `deploy_dir` supports both relative and absolute paths
 
 **File Formats**:
 
@@ -303,11 +323,29 @@ phases:
 **Error**: Build phase failed - compilation error in auth.go
 ```
 
-**CLI Behavior** (if implemented):
-- After job submission, CLI could optionally poll server for status and logs
-- Upon completion (success or failure), could write results to `deploy/builds/<job-id>/`
-- Could append entry to `deploy/history.md`
-- Could store complete logs for each phase in separate `.log` files
+**CLI Behavior**:
+
+**With `--history` flag only** (no `--watch`):
+- Creates `deploy/builds/<job-id>/` directory structure
+- Writes initial metadata.yaml with submission time, config, and branch
+- Prepends initial entry to deploy/history.md (status: SUBMITTED)
+- Does NOT write final status, logs, or completion metrics
+- Returns immediately after job submission
+
+**With `--history --watch` flags** (recommended):
+- Creates `deploy/builds/<job-id>/` directory structure
+- Writes initial metadata.yaml with submission time, config, and branch
+- Monitors job progress in real-time via Consul KV
+- Fetches logs from server as each phase completes
+- Writes phase-specific logs to separate `.log` files (build.log, test.log, deploy.log)
+- On completion/failure, writes final status.md with complete metrics
+- Updates metadata.yaml with final status and timing information
+- Prepends final entry to deploy/history.md with complete status and branch info
+
+**Error Handling**:
+- If deploy directory creation fails, submit operation fails with clear error
+- If history file writes fail during watching, logs warnings but continues monitoring
+- User is responsible for ensuring adequate disk space and write permissions
 
 #### FR5: Documentation Updates
 
@@ -594,20 +632,26 @@ jobforge version-info
 # Output: Current version for branch 'feature/auth-fix': feature/auth-fix-v0.1.4
 # Output: Next version will be: feature/auth-fix-v0.1.5
 
-# Submit build (auto-increments patch version)
-jobforge submit -global deploy/global.yaml -config build.yaml
-# Output: Job submitted: build-abc123def456
-# Output: Version: feature/auth-fix-v0.1.5
-# Output: Polling for status...
-# Output: [BUILDING] Build phase in progress...
-# Output: [TESTING] Test phase in progress...
-# Output: [PUBLISHING] Deploy phase in progress...
-# Output: [SUCCESS] Build completed in 4m27s
-# Output: Results written to: deploy/builds/feature/auth-fix-v0.1.5/
+# Submit build with history tracking (basic - submission only)
+jobforge submit-job -global deploy/global.yaml build.yaml --history
+# Output: Job submitted: abc123def456
+# Output: Status: PENDING
+# Output: History recorded to: deploy/builds/abc123def456/
+
+# Submit build with full history tracking (recommended)
+jobforge submit-job -global deploy/global.yaml build.yaml --history --watch
+# Output: Watching job: abc123def456
+# Output: Service URL: http://10.0.1.16:21654
+# Output: [12:34:56] 🔨 Status: BUILDING | Phase: build
+# Output: [12:36:42] 🧪 Status: TESTING | Phase: test
+# Output: [12:38:15] 📦 Status: PUBLISHING | Phase: publish
+# Output: ✅ Job completed successfully
+# Output: Complete history written to: deploy/builds/abc123def456/
 
 # Check build results
-cat deploy/builds/feature-auth-fix-v0.1.5/status.md
-cat deploy/builds/feature-auth-fix-v0.1.5/build.log
+cat deploy/builds/abc123def456/status.md
+cat deploy/builds/abc123def456/metadata.yaml
+cat deploy/builds/abc123def456/build.log
 cat deploy/history.md
 ```
 

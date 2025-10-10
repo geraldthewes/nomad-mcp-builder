@@ -240,6 +240,169 @@ jobforge submit-job build.yaml --image-tags "latest,stable"
 cat build.yaml | jobforge submit-job
 ```
 
+### Local Build History
+
+The CLI supports optional local build history tracking via the `--history` flag. When enabled, it creates a structured directory of build records for debugging and tracking.
+
+#### Basic Usage
+
+```bash
+# Record submission only (no final status)
+jobforge submit-job build.yaml --history
+
+# Record complete build with logs and final status (recommended)
+jobforge submit-job build.yaml --history --watch
+```
+
+#### Directory Structure
+
+History is stored in `deploy/` (configurable via `deploy_dir` in YAML):
+
+```
+deploy/
+├── global.yaml              # Global configuration
+├── builds/                  # Per-build history
+│   ├── abc123def456/        # Directory named by job-id
+│   │   ├── status.md        # Summary: phases, status, duration, branch
+│   │   ├── metadata.yaml    # Job config, timestamps, job-id, branch
+│   │   ├── build.log        # Build phase logs (stdout + stderr)
+│   │   ├── test.log         # Test phase logs (if applicable)
+│   │   └── publish.log      # Publish phase logs (if applicable)
+│   └── def456ghi789/
+│       └── ...
+└── history.md               # Chronological summary (newest first)
+```
+
+#### Configuration
+
+Configure the deploy directory location in your YAML config:
+
+```yaml
+# build.yaml or global.yaml
+deploy_dir: "deploy"  # Default: "./deploy" (relative to CWD)
+```
+
+Both relative (resolved from CWD) and absolute paths are supported.
+
+#### History Modes
+
+**1. Submission Only (`--history` alone):**
+- Creates `deploy/builds/<job-id>/` directory
+- Writes `metadata.yaml` with submission time and config
+- Adds entry to `history.md` with status "PENDING"
+- Returns immediately after job submission
+- Useful for tracking submitted jobs without waiting
+
+**2. Complete History (`--history --watch`):**
+- Creates directory and initial metadata
+- Monitors job progress in real-time via Consul KV
+- Fetches logs from server as each phase completes
+- Writes phase-specific logs to `.log` files
+- On completion, writes final `status.md` and `metadata.yaml`
+- Updates `history.md` with complete status and timing
+- **Recommended for interactive use and debugging**
+
+#### File Formats
+
+**`status.md`** - Human-readable build summary:
+```markdown
+# Build Status: abc123def456
+
+✅ Status: SUCCEEDED
+**Branch**: main
+**Git Ref**: refs/heads/main
+**Started**: 2025-10-10T14:23:45Z
+**Completed**: 2025-10-10T14:28:12Z
+**Duration**: 4m27s
+
+## Phases
+- Build: ✅ SUCCESS (2m15s)
+- Test: ✅ SUCCESS (1m30s)
+- Publish: ✅ SUCCESS (42s)
+
+## Image
+- Registry: registry.cluster:5000
+- Image: my-service
+- Tags: abc123def456, v1.0.0
+```
+
+**`metadata.yaml`** - Complete job metadata:
+```yaml
+job_id: abc123def456
+submitted_at: 2025-10-10T14:23:45Z
+completed_at: 2025-10-10T14:28:12Z
+status: SUCCEEDED
+branch: main
+git_ref: refs/heads/main
+job_config:
+  owner: myteam
+  repo_url: https://github.com/myorg/myservice.git
+  # ... complete config
+phases:
+  build:
+    status: SUCCEEDED
+    duration: 2m15s
+  test:
+    status: SUCCEEDED
+    duration: 1m30s
+  publish:
+    status: SUCCEEDED
+    duration: 42s
+```
+
+**`history.md`** - Chronological build log (newest first):
+```markdown
+# Build History
+
+## def456ghi789 (2025-10-10 15:30:12 UTC)
+**Branch**: feature/new-feature | **Git Ref**: feature/new-feature
+**Status**: ✅ SUCCEEDED | **Duration**: 4m12s
+**Tags**: def456ghi789, latest
+
+## abc123def456 (2025-10-10 14:28:12 UTC)
+**Branch**: main | **Git Ref**: refs/heads/main
+**Status**: ✅ SUCCEEDED | **Duration**: 4m27s
+**Tags**: abc123def456, v1.0.0
+```
+
+#### Error Handling
+
+- Directory creation failures cause the submit operation to fail with clear error messages
+- History file write failures during watching log warnings but continue monitoring
+- Ensure adequate disk space and write permissions for the deploy directory
+
+#### Example Workflows
+
+**Development Workflow:**
+```bash
+# Work on feature branch
+git checkout -b feature/new-api
+
+# Submit build with complete history tracking
+jobforge submit-job build.yaml --history --watch
+
+# Review build results
+cat deploy/builds/<job-id>/status.md
+cat deploy/builds/<job-id>/test.log
+
+# Check recent history
+cat deploy/history.md
+```
+
+**CI/CD Integration:**
+```bash
+#!/bin/bash
+# Record build submission for audit trail
+jobforge submit-job build.yaml --history
+JOB_ID=$(cat deploy/builds/*/metadata.yaml | yq .job_id | tail -1)
+
+# Continue with other tasks while build runs
+# ... your CI/CD workflow ...
+
+# Later check status
+jobforge get-status $JOB_ID
+```
+
 
 ### Server Environment Variables
 
