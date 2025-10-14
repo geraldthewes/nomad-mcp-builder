@@ -404,18 +404,28 @@ func convertMCPArgsToJobConfig(args map[string]interface{}) *types.JobConfig {
 		}
 	}
 
-	// Convert test commands
+	// Convert test commands and entry point into Test config
+	var testCommands []string
+	var testEntryPoint bool
+
 	if testCmdsInterface, ok := args["test_commands"].([]interface{}); ok {
 		for _, cmd := range testCmdsInterface {
 			if cmdStr, ok := cmd.(string); ok {
-				jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
+				testCommands = append(testCommands, cmdStr)
 			}
 		}
 	}
 
-	// Handle test_entry_point parameter
-	if testEntryPoint, ok := args["test_entry_point"].(bool); ok {
-		jobConfig.TestEntryPoint = testEntryPoint
+	if entryPoint, ok := args["test_entry_point"].(bool); ok {
+		testEntryPoint = entryPoint
+	}
+
+	// Create Test config if there are any test settings
+	if len(testCommands) > 0 || testEntryPoint {
+		jobConfig.Test = &types.TestConfig{
+			Commands:   testCommands,
+			EntryPoint: testEntryPoint,
+		}
 	}
 
 	// Parse resource limits (this is what's missing from the actual mcpSubmitJob!)
@@ -450,9 +460,11 @@ func validateJobConfigStrict(config *types.JobConfig) error {
 		return &ValidationError{"registry_url is required"}
 	}
 
-	// Validate at least one testing mode is specified if test_commands is empty
-	if len(config.TestCommands) == 0 && !config.TestEntryPoint {
-		// This is allowed - no testing will be performed
+	// Validate at least one testing mode is specified if test config exists
+	if config.Test != nil {
+		if len(config.Test.Commands) == 0 && !config.Test.EntryPoint {
+			// This is allowed - no testing will be performed
+		}
 	}
 
 	return nil

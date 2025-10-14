@@ -215,7 +215,10 @@ git_ref: feature/new-feature
 image_tags:
   - test
   - dev
-test_entry_point: true
+test:
+  entry_point: true
+  env:
+    TEST_MODE: "integration"
 ```
 
 #### Merging Behavior
@@ -568,7 +571,12 @@ jobforge submit-job '{
   "image_name": "myapp",
   "image_tags": ["v1.0", "latest"],
   "registry_url": "registry.cluster:5000/myapp",
-  "test_entry_point": true
+  "test": {
+    "entry_point": true,
+    "env": {
+      "NODE_ENV": "test"
+    }
+  }
 }'
 ```
 
@@ -929,10 +937,16 @@ curl -X POST http://localhost:8080/json/submitJob \
       "image_tags": ["latest", "v1.0.0"],
       "registry_url": "docker.io/user",
       "registry_credentials_path": "secret/nomad/jobs/registry-credentials",
-      "test_commands": [
-        "/app/run-tests.sh",
-        "/app/integration-tests.sh"
-      ]
+      "test": {
+        "commands": [
+          "/app/run-tests.sh",
+          "/app/integration-tests.sh"
+        ],
+        "env": {
+          "TEST_ENVIRONMENT": "ci",
+          "LOG_LEVEL": "debug"
+        }
+      }
     }
   }'
 ```
@@ -1248,7 +1262,9 @@ curl -X POST http://${SERVICE_URL:-localhost:8080}/json/submitJob \
       "image_name": "helloworld",
       "image_tags": ["hello-world-test"],
       "registry_url": "registry.cluster:5000",
-      "test_entry_point": true
+      "test": {
+        "entry_point": true
+      }
     }
   }'
 

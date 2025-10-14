@@ -1,0 +1,21 @@
+---
+owner: code-agent
+repo_url: https://github.com/geraldthewes/video-transcription-batch.git
+git_ref: main
+dockerfile_path: docker/Dockerfile
+image_name: video-transcription-batch
+registry_url: registry.cluster:5000
+resource_limits:
+  cpu: "2000"      # 2000 MHz (2 CPU cores)
+  memory: "16384"  # (16 GB RAM)
+  disk: "20480"    # 20480 MB (20 GB disk)
+test:
+  entry_point: true
+  env:
+    S3_TRANSCRIBER_BUCKET: "ai-storage"
+    S3_TRANSCRIBER_PREFIX: "transcriber"
+    S3_JOB_ID: "18517e9c-f624-4a16-bc10-a9236dbea7e1"
+    OLLAMA_HOST: "http://10.0.1.12:11434"
+    AWS_REGION: "us-east-1"
+    S3_ENDPOINT: "http://cluster00.cluster"
+    NVIDIA_VISIBLE_DEVICES: "all"

@@ -247,7 +247,9 @@ func testSubmitJob(cfg *config.Config) func(*testing.T) {
 			ImageTags:               []string{"test"},
 			RegistryURL:             "localhost:5000/test-app",
 			RegistryCredentialsPath: "secret/test/registry-creds",
-			TestCommands:            []string{"echo 'test completed'"},
+			Test: &types.TestConfig{
+				Commands: []string{"echo 'test completed'"},
+			},
 		}
 		
 		submitReq := types.SubmitJobRequest{

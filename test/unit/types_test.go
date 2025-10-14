@@ -39,7 +39,9 @@ func TestJobConfigValidation(t *testing.T) {
 		ImageTags:               []string{"latest", "v1.0.0"},
 		RegistryURL:             "docker.io/test/app",
 		RegistryCredentialsPath: "secret/registry-creds",
-		TestCommands:            []string{"make test", "make integration-test"},
+		Test: &types.TestConfig{
+			Commands: []string{"make test", "make integration-test"},
+		},
 	}
 	
 	// Test that valid config doesn't cause issues in creation

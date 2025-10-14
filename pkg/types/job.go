@@ -14,6 +14,15 @@ const (
 	StatusFailed     JobStatus = "FAILED"
 )
 
+// TestConfig represents test phase configuration
+type TestConfig struct {
+	Commands       []string               `json:"commands,omitempty" yaml:"commands,omitempty"`             // Custom test commands to run
+	EntryPoint     bool                   `json:"entry_point,omitempty" yaml:"entry_point,omitempty"`       // Run the image's default entrypoint/CMD as a test
+	Env            map[string]string      `json:"env,omitempty" yaml:"env,omitempty"`                       // Environment variables for test execution
+	ResourceLimits *PhaseResourceLimits   `json:"resource_limits,omitempty" yaml:"resource_limits,omitempty"` // Test phase resource limits
+	Timeout        *time.Duration         `json:"timeout,omitempty" yaml:"timeout,omitempty"`               // Test phase timeout
+}
+
 // JobConfig represents the configuration for a build job
 type JobConfig struct {
 	Owner                   string   `json:"owner" yaml:"owner"`
@@ -25,11 +34,9 @@ type JobConfig struct {
 	ImageTags               []string `json:"image_tags" yaml:"image_tags"`
 	RegistryURL             string   `json:"registry_url" yaml:"registry_url"`
 	RegistryCredentialsPath string   `json:"registry_credentials_path" yaml:"registry_credentials_path"`
-	TestCommands            []string `json:"test_commands" yaml:"test_commands"`
-	TestEntryPoint          bool     `json:"test_entry_point,omitempty" yaml:"test_entry_point,omitempty"`
+	Test                    *TestConfig     `json:"test,omitempty" yaml:"test,omitempty"`                     // Test phase configuration
 	ResourceLimits          *ResourceLimits `json:"resource_limits,omitempty" yaml:"resource_limits,omitempty"`
 	BuildTimeout            *time.Duration  `json:"build_timeout,omitempty" yaml:"build_timeout,omitempty"`
-	TestTimeout             *time.Duration  `json:"test_timeout,omitempty" yaml:"test_timeout,omitempty"`
 	ClearCache              bool     `json:"clear_cache,omitempty" yaml:"clear_cache,omitempty"`  // Clear build cache before building
 
 	// Webhook configuration for build notifications

@@ -181,13 +181,17 @@ func TestMergeJobConfigsComplexTypes(t *testing.T) {
 		ImageName:      "global-image",
 		ImageTags:      []string{"latest"},
 		RegistryURL:    "registry.example.com/global",
-		TestCommands:   []string{"test1", "test2"},
+		Test: &types.TestConfig{
+			Commands: []string{"test1", "test2"},
+		},
 	}
 
 	perBuild := &types.JobConfig{
-		GitRef:       "feature/branch",
-		ImageTags:    []string{"v2.0.0", "beta"},
-		TestCommands: []string{"test3"},
+		GitRef:    "feature/branch",
+		ImageTags: []string{"v2.0.0", "beta"},
+		Test: &types.TestConfig{
+			Commands: []string{"test3"},
+		},
 	}
 
 	merged := mergeJobConfigs(global, perBuild)
@@ -209,7 +213,11 @@ func TestMergeJobConfigsComplexTypes(t *testing.T) {
 	if len(merged.ImageTags) != 2 {
 		t.Errorf("Expected 2 image tags, got %d", len(merged.ImageTags))
 	}
-	if len(merged.TestCommands) != 1 {
-		t.Errorf("Expected 1 test command, got %d", len(merged.TestCommands))
+	if merged.Test == nil || len(merged.Test.Commands) != 1 {
+		if merged.Test == nil {
+			t.Errorf("Expected Test config to be set")
+		} else {
+			t.Errorf("Expected 1 test command, got %d", len(merged.Test.Commands))
+		}
 	}
 }

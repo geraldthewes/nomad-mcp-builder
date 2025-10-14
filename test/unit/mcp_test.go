@@ -268,18 +268,28 @@ func TestMCPParameterConsistencyWithValidation(t *testing.T) {
 				}
 			}
 
-			// Convert test commands
+			// Convert test commands and entry point into Test config
+			var testCommands []string
+			var testEntryPoint bool
+
 			if testCmdsInterface, ok := tc.args["test_commands"].([]interface{}); ok {
 				for _, cmd := range testCmdsInterface {
 					if cmdStr, ok := cmd.(string); ok {
-						jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
+						testCommands = append(testCommands, cmdStr)
 					}
 				}
 			}
 
-			// Handle test_entry_point parameter
-			if testEntryPoint, ok := tc.args["test_entry_point"].(bool); ok {
-				jobConfig.TestEntryPoint = testEntryPoint
+			if entryPoint, ok := tc.args["test_entry_point"].(bool); ok {
+				testEntryPoint = entryPoint
+			}
+
+			// Create Test config if there are any test settings
+			if len(testCommands) > 0 || testEntryPoint {
+				jobConfig.Test = &types.TestConfig{
+					Commands:   testCommands,
+					EntryPoint: testEntryPoint,
+				}
 			}
 
 			// This simulates the validateJobConfig call that should happen in mcpSubmitJob
@@ -385,18 +395,28 @@ func TestMCPParameterConsistencyWithValidation(t *testing.T) {
 				}
 			}
 
-			// Convert test commands
+			// Convert test commands and entry point into Test config
+			var testCommands []string
+			var testEntryPoint bool
+
 			if testCmdsInterface, ok := tc.args["test_commands"].([]interface{}); ok {
 				for _, cmd := range testCmdsInterface {
 					if cmdStr, ok := cmd.(string); ok {
-						jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
+						testCommands = append(testCommands, cmdStr)
 					}
 				}
 			}
 
-			// Handle test_entry_point parameter
-			if testEntryPoint, ok := tc.args["test_entry_point"].(bool); ok {
-				jobConfig.TestEntryPoint = testEntryPoint
+			if entryPoint, ok := tc.args["test_entry_point"].(bool); ok {
+				testEntryPoint = entryPoint
+			}
+
+			// Create Test config if there are any test settings
+			if len(testCommands) > 0 || testEntryPoint {
+				jobConfig.Test = &types.TestConfig{
+					Commands:   testCommands,
+					EntryPoint: testEntryPoint,
+				}
 			}
 
 			// This simulates the validateJobConfig call that should happen in mcpSubmitJob

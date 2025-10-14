@@ -71,15 +71,17 @@ func TestBuildWorkflow(t *testing.T) {
 	// Step 2: Submit build job with unique naming to avoid conflicts
 	t.Log("Submitting build job...")
 	jobConfig := types.JobConfig{
-		Owner:           "test",
-		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
-		GitRef:          "main",
-		DockerfilePath:  "Dockerfile",
-		ImageName:       fmt.Sprintf("hello-world-%s", testID), // Unique image name
-		ImageTags:       []string{"latest"},
-		RegistryURL:     fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
-		TestCommands:    []string{}, // Empty to use entry point
-		TestEntryPoint:  true,
+		Owner:          "test",
+		RepoURL:        "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:         "main",
+		DockerfilePath: "Dockerfile",
+		ImageName:      fmt.Sprintf("hello-world-%s", testID), // Unique image name
+		ImageTags:      []string{"latest"},
+		RegistryURL:    fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
+		Test: &types.TestConfig{
+			Commands:   []string{}, // Empty to use entry point
+			EntryPoint: true,
+		},
 	}
 
 	jobID, err := submitJob(serviceURL, jobConfig)
@@ -292,15 +294,14 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 	// Step 2: Submit build job with NO TESTS configured and unique naming
 	t.Log("Submitting build job with no tests configured...")
 	jobConfig := types.JobConfig{
-		Owner:           "test",
-		RepoURL:         "https://github.com/geraldthewes/docker-build-hello-world.git",
-		GitRef:          "main",
-		DockerfilePath:  "Dockerfile",
-		ImageName:       fmt.Sprintf("hello-world-%s", testID), // Unique image name
-		ImageTags:       []string{"optimized", "latest"},
-		RegistryURL:     fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
-		TestCommands:    []string{}, // NO tests
-		TestEntryPoint:  false,      // NO entry point test
+		Owner:          "test",
+		RepoURL:        "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:         "main",
+		DockerfilePath: "Dockerfile",
+		ImageName:      fmt.Sprintf("hello-world-%s", testID), // Unique image name
+		ImageTags:      []string{"optimized", "latest"},
+		RegistryURL:    fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
+		// NO Test config - no tests configured
 	}
 
 	jobID, err := submitJob(serviceURL, jobConfig)
@@ -585,9 +586,11 @@ func TestWebhookNotifications(t *testing.T) {
 		ImageName:      "webhook-test",
 		ImageTags:      []string{testID},
 		RegistryURL:    "registry.cluster:5000/webhooktest",
-		TestEntryPoint: true,
-		WebhookURL:     webhookURL,
-		WebhookSecret:  webhookSecret,
+		Test: &types.TestConfig{
+			EntryPoint: true,
+		},
+		WebhookURL:       webhookURL,
+		WebhookSecret:    webhookSecret,
 		WebhookOnSuccess: true,
 		WebhookOnFailure: true,
 		WebhookHeaders: map[string]string{

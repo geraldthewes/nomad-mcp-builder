@@ -1243,18 +1243,54 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 		}
 	}
 
-	// Convert test commands
-	if testCmdsInterface, ok := args["test_commands"].([]interface{}); ok {
-		for _, cmd := range testCmdsInterface {
-			if cmdStr, ok := cmd.(string); ok {
-				jobConfig.TestCommands = append(jobConfig.TestCommands, cmdStr)
-			}
-		}
-	}
+	// Parse test configuration
+	if testInterface, ok := args["test"]; ok {
+		if testMap, ok := testInterface.(map[string]interface{}); ok {
+			testConfig := &types.TestConfig{}
 
-	// Handle test_entry_point parameter
-	if testEntryPoint, ok := args["test_entry_point"].(bool); ok {
-		jobConfig.TestEntryPoint = testEntryPoint
+			// Parse test commands
+			if cmdsInterface, ok := testMap["commands"].([]interface{}); ok {
+				for _, cmd := range cmdsInterface {
+					if cmdStr, ok := cmd.(string); ok {
+						testConfig.Commands = append(testConfig.Commands, cmdStr)
+					}
+				}
+			}
+
+			// Parse test entry point
+			if entryPoint, ok := testMap["entry_point"].(bool); ok {
+				testConfig.EntryPoint = entryPoint
+			}
+
+			// Parse test environment variables
+			if envInterface, ok := testMap["env"].(map[string]interface{}); ok {
+				testConfig.Env = make(map[string]string)
+				for key, value := range envInterface {
+					if valueStr, ok := value.(string); ok {
+						testConfig.Env[key] = valueStr
+					}
+				}
+			}
+
+			// Parse test resource limits
+			if limitsInterface, ok := testMap["resource_limits"]; ok {
+				if limitsMap, ok := limitsInterface.(map[string]interface{}); ok {
+					limits := &types.PhaseResourceLimits{}
+					if cpu, ok := limitsMap["cpu"].(string); ok {
+						limits.CPU = cpu
+					}
+					if memory, ok := limitsMap["memory"].(string); ok {
+						limits.Memory = memory
+					}
+					if disk, ok := limitsMap["disk"].(string); ok {
+						limits.Disk = disk
+					}
+					testConfig.ResourceLimits = limits
+				}
+			}
+
+			jobConfig.Test = testConfig
+		}
 	}
 
 	// Parse resource limits
@@ -1510,14 +1546,19 @@ func validateJobConfig(config *types.JobConfig) error {
 		return fmt.Errorf("registry_url is required")
 	}
 	
-	// Validate at least one testing mode is specified if test_commands is empty
-	if len(config.TestCommands) == 0 && !config.TestEntryPoint {
-		// This is allowed - no testing will be performed
+	// Validate test configuration if provided
+	if config.Test != nil {
+		// Validate at least one testing mode is specified
+		if len(config.Test.Commands) == 0 && !config.Test.EntryPoint {
+			// This is allowed - empty test config means no testing
+		}
+		// Validate env is a valid map (Go already enforces this at unmarshal time)
+		// No additional validation needed for env variables
 	}
-	
-	// Optional fields (git_credentials_path, registry_credentials_path, test_entry_point, test_commands, image_tags)
+
+	// Optional fields (git_credentials_path, registry_credentials_path, test, image_tags)
 	// are allowed to be empty
-	
+
 	return nil
 }
 

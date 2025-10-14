@@ -179,7 +179,7 @@ func (nc *Client) CreateJob(jobConfig *types.JobConfig) (*types.Job, error) {
 // UpdateJobStatus updates the job status by querying Nomad
 func (nc *Client) UpdateJobStatus(job *types.Job) (*types.Job, error) {
 	// Check if tests are configured
-	skipTests := len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint
+	skipTests := job.Config.Test == nil || (len(job.Config.Test.Commands) == 0 && !job.Config.Test.EntryPoint)
 	
 	// Check build job status
 	if job.BuildJobID != "" {
@@ -1018,7 +1018,7 @@ func (nc *Client) getBuildJobNodeID(buildJobID string) (string, error) {
 }
 
 func (nc *Client) startTestPhase(job *types.Job) error {
-	if len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint {
+	if job.Config.Test == nil || (len(job.Config.Test.Commands) == 0 && !job.Config.Test.EntryPoint) {
 		// No tests configured, skip to publish phase
 		nc.logger.WithField("job_id", job.ID).Info("No tests configured, skipping test phase")
 		return nc.startPublishPhase(job)

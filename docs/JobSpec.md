@@ -31,23 +31,54 @@ These fields **must** be provided in every job configuration:
 
 ### Testing Configuration
 
+Test configuration is specified under the `test` key, which groups all test-related settings.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `test_commands` | array[string] | `[]` | Commands to run in test phase |
-| `test_entry_point` | boolean | `false` | Test container's ENTRYPOINT |
+| `test.commands` | array[string] | `[]` | Commands to run in test phase |
+| `test.entry_point` | boolean | `false` | Test container's ENTRYPOINT |
+| `test.env` | map[string]string | `{}` | Environment variables for test containers |
+| `test.resource_limits` | ResourceLimits | - | Per-test resource overrides |
+| `test.timeout` | duration | `15m` | Maximum test phase duration |
 
-**Note**: If both `test_commands` and `test_entry_point` are empty/false, the test phase is **skipped**.
+**Note**: If both `test.commands` and `test.entry_point` are empty/false, the test phase is **skipped**.
 
 **Examples**:
 
 ```yaml
 # Run specific test commands
-test_commands:
-  - /app/run-tests.sh
-  - /app/validate.sh
+test:
+  commands:
+    - /app/run-tests.sh
+    - /app/validate.sh
 
-# Or test the entrypoint
-test_entry_point: true
+# Test the entrypoint
+test:
+  entry_point: true
+
+# Test with environment variables
+test:
+  entry_point: true
+  env:
+    S3_TRANSCRIBER_BUCKET: "ai-storage"
+    S3_TRANSCRIBER_PREFIX: "transcriber"
+    OLLAMA_HOST: "http://10.0.1.12:11434"
+    AWS_REGION: "us-east-1"
+    NVIDIA_VISIBLE_DEVICES: "all"
+
+# Complete test configuration
+test:
+  commands:
+    - npm test
+    - npm run lint
+  env:
+    NODE_ENV: "test"
+    DATABASE_URL: "postgres://test:test@localhost/testdb"
+  resource_limits:
+    cpu: "2000"
+    memory: "4096"
+    disk: "10240"
+  timeout: 20m
 ```
 
 ### Resource Limits
@@ -268,9 +299,13 @@ dockerfile_path: docker/Dockerfile
 registry_credentials_path: secret/nomad/jobs/registry-credentials
 
 # Testing
-test_commands:
-  - /app/run-tests.sh
-  - /app/validate-config.sh
+test:
+  commands:
+    - /app/run-tests.sh
+    - /app/validate-config.sh
+  env:
+    NODE_ENV: "production"
+    API_URL: "https://api.example.com"
 
 # Resource limits (per-phase)
 resource_limits:
@@ -340,7 +375,10 @@ git_ref: feature/auth-fix
 image_tags:
   - test
   - dev
-test_entry_point: true
+test:
+  entry_point: true
+  env:
+    TEST_MODE: "integration"
 webhook_url: https://hooks.slack.com/services/T00/B00/XXX
 ```
 
@@ -459,7 +497,14 @@ jobforge submit-job -config build.yaml --image-tags "latest,stable"
         "dockerfile_path": "Dockerfile",
         "image_name": "myservice",
         "image_tags": ["v1.0.0"],
-        "registry_url": "registry.example.com:5000/myapp"
+        "registry_url": "registry.example.com:5000/myapp",
+        "test": {
+          "entry_point": true,
+          "env": {
+            "NODE_ENV": "test",
+            "API_URL": "https://api-test.example.com"
+          }
+        }
       }
     }
   }
@@ -478,7 +523,13 @@ curl -X POST http://localhost:8080/json/submitJob \
       "git_ref": "main",
       "image_name": "myservice",
       "image_tags": ["v1.0.0"],
-      "registry_url": "registry.example.com:5000/myapp"
+      "registry_url": "registry.example.com:5000/myapp",
+      "test": {
+        "commands": ["npm test"],
+        "env": {
+          "NODE_ENV": "test"
+        }
+      }
     }
   }'
 ```
@@ -502,12 +553,13 @@ Understanding the three-phase workflow:
 - Timeout: `build_timeout` (default: 30m)
 
 ### 2. Test Phase
-- **Skipped if**: No `test_commands` and `test_entry_point` is `false`
+- **Skipped if**: No `test.commands` and `test.entry_point` is `false`
 - Runs Docker container with built image
 - Executes test commands OR tests entrypoint
+- Environment variables from `test.env` are applied to test containers
 - Multiple test jobs run in parallel if multiple test commands specified
-- Uses resource limits from `resource_limits.test` or global `resource_limits`
-- Timeout: `test_timeout` (default: 15m)
+- Uses resource limits from `test.resource_limits` or `resource_limits.test` or global `resource_limits`
+- Timeout: `test.timeout` or global `test_timeout` (default: 15m)
 
 ### 3. Publish Phase
 - Pulls image from temporary location
@@ -552,9 +604,13 @@ image_name: myservice
 image_tags: [v1.0.0]
 registry_url: registry.example.com:5000/myapp
 
-test_commands:
-  - npm test
-  - npm run lint
+test:
+  commands:
+    - npm test
+    - npm run lint
+  env:
+    NODE_ENV: "test"
+    CI: "true"
 
 resource_limits:
   build:

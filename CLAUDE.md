@@ -70,7 +70,7 @@ The system consists of:
 ## MCP API Endpoints
 
 The service exposes these MCP endpoints via JSON-RPC over HTTP:
-- `submitJob`: Submit build request with Git repo, credentials refs, test commands
+- `submitJob`: Submit build request with Git repo, credentials refs, test configuration (commands, entry point, environment variables)
 - `getStatus`: Poll job status (`PENDING`, `BUILDING`, `TESTING`, `PUBLISHING`, `SUCCEEDED`, `FAILED`)
 - `getLogs`: Retrieve phase-specific logs for debugging
 - `killJob`: Terminate running jobs
@@ -120,6 +120,14 @@ The CLI supports YAML job configurations with deep merge capability:
 - **Global config** (`deploy/global.yaml`): Shared settings across all builds
 - **Per-build config** (e.g., `build.yaml`): Build-specific overrides
 - Per-build values override global values for any non-zero field
+
+**Test Configuration:**
+Test phase settings are grouped under the `test` key:
+- `test.commands`: List of test commands to execute
+- `test.entry_point`: Test the container's ENTRYPOINT
+- `test.env`: Environment variables for test containers (e.g., S3 credentials, API URLs, GPU settings)
+- `test.resource_limits`: Per-test resource overrides
+- `test.timeout`: Maximum test phase duration
 
 **Job Progress Monitoring:**
 Two approaches for monitoring job progress:
@@ -293,7 +301,12 @@ curl -X POST http://${SERVICE_URL}/mcp/submitJob \
       "dockerfile_path": "Dockerfile",
       "image_tags": ["hello-world-test"],
       "registry_url": "registry.cluster:5000/helloworld",
-      "test_entry_point": true
+      "test": {
+        "entry_point": true,
+        "env": {
+          "NODE_ENV": "test"
+        }
+      }
     }
   }'
 ```

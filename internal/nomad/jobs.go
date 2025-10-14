@@ -29,7 +29,7 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 	fmt.Sscanf(buildLimits.Disk, "%d", &disk)
 	
 	// Determine if we should skip tests (no tests configured)
-	skipTests := len(job.Config.TestCommands) == 0 && !job.Config.TestEntryPoint
+	skipTests := job.Config.Test == nil || (len(job.Config.Test.Commands) == 0 && !job.Config.Test.EntryPoint)
 	
 	var buildImageNames []string
 	var pushCommands []string
@@ -277,7 +277,12 @@ func (nc *Client) createBuildJobSpec(job *types.Job) (*nomadapi.Job, error) {
 // createTestJobSpecs creates Nomad job specifications for the test phase using Docker driver directly
 func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nomadapi.Job, error) {
 	var testJobs []*nomadapi.Job
-	
+
+	// If no test configuration, return empty array
+	if job.Config.Test == nil {
+		return []*nomadapi.Job{}, nil
+	}
+
 	// Resource limits with defaults for test phase
 	testDefaults := types.PhaseResourceLimits{
 		CPU:    "500",  // Less than build phase since tests are simpler
@@ -285,19 +290,35 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 		Disk:   "2048", // Tests need minimal disk
 	}
 
-	testLimits := job.Config.ResourceLimits.GetTestLimits(testDefaults)
+	// Use test-specific resource limits if provided, otherwise fall back to global resource limits
+	var testLimits types.PhaseResourceLimits
+	if job.Config.Test.ResourceLimits != nil {
+		testLimits = *job.Config.Test.ResourceLimits
+		// Fill in any missing values with defaults
+		if testLimits.CPU == "" {
+			testLimits.CPU = testDefaults.CPU
+		}
+		if testLimits.Memory == "" {
+			testLimits.Memory = testDefaults.Memory
+		}
+		if testLimits.Disk == "" {
+			testLimits.Disk = testDefaults.Disk
+		}
+	} else {
+		testLimits = job.Config.ResourceLimits.GetTestLimits(testDefaults)
+	}
 
 	var cpu, memory, disk int
 	fmt.Sscanf(testLimits.CPU, "%d", &cpu)
 	fmt.Sscanf(testLimits.Memory, "%d", &memory)
 	fmt.Sscanf(testLimits.Disk, "%d", &disk)
-	
+
 	// Create temporary image name - this is the image built in the build phase
 	tempImageName := nc.generateTempImageName(job)
-	
+
 	// Mode 1: Create separate test jobs for each custom test command
-	if len(job.Config.TestCommands) > 0 {
-		for i, testCmd := range job.Config.TestCommands {
+	if len(job.Config.Test.Commands) > 0 {
+		for i, testCmd := range job.Config.Test.Commands {
 			jobID := fmt.Sprintf("test-cmd-%s-%d", job.ID, i)
 			
 			testJobSpec := &nomadapi.Job{
@@ -348,6 +369,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 										"/etc/docker/certs.d:/etc/docker/certs.d:ro",
 									},
 								},
+								Env: job.Config.Test.Env, // Add test environment variables
 								Resources: &nomadapi.Resources{
 									CPU:      intPtr(cpu),
 									MemoryMB: intPtr(memory),
@@ -382,7 +404,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 	}
 	
 	// Mode 2: Create a test job that runs the image's entry point/CMD
-	if job.Config.TestEntryPoint {
+	if job.Config.Test.EntryPoint {
 		jobID := fmt.Sprintf("test-entry-%s", job.ID)
 		
 		testJobSpec := &nomadapi.Job{
@@ -429,6 +451,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 									"/etc/docker/certs.d:/etc/docker/certs.d:ro",
 								},
 							},
+							Env: job.Config.Test.Env, // Add test environment variables
 							Resources: &nomadapi.Resources{
 								CPU:      intPtr(cpu),
 								MemoryMB: intPtr(memory),
