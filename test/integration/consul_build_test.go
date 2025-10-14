@@ -259,6 +259,181 @@ func TestBuildWorkflow(t *testing.T) {
 	t.Logf("Test completed successfully in %s", result.Duration)
 }
 
+// TestBuildWorkflowWithEnv tests that environment variables are correctly passed to test containers
+func TestBuildWorkflowWithEnv(t *testing.T) {
+	// Serialize tests to avoid registry conflicts
+	globalTestMutex.Lock()
+	defer globalTestMutex.Unlock()
+
+	// Create results directory
+	resultsDir := "test_results"
+	err := os.MkdirAll(resultsDir, 0755)
+	require.NoError(t, err, "Failed to create results directory")
+
+	startTime := time.Now()
+	result := TestResult{
+		Timestamp: make(map[string]string),
+		Duration:  make(map[string]string),
+	}
+	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
+
+	// Generate unique test identifier to avoid registry conflicts
+	testID := fmt.Sprintf("envtest-%d", time.Now().Unix())
+
+	// Step 1: Discover service URL via Consul
+	t.Log("Discovering nomad-build-service via Consul...")
+	serviceURL, err := discoverServiceURL()
+	if err != nil {
+		result.Error = fmt.Sprintf("Service discovery failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to discover service: %v", err)
+	}
+	t.Logf("Discovered service at: %s", serviceURL)
+
+	// Step 2: Submit build job with environment variables for testing
+	t.Log("Submitting build job with WORLD=Claude environment variable...")
+	jobConfig := types.JobConfig{
+		Owner:          "test",
+		RepoURL:        "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:         "main",
+		DockerfilePath: "Dockerfile",
+		ImageName:      fmt.Sprintf("hello-world-%s", testID), // Unique image name
+		ImageTags:      []string{"latest"},
+		RegistryURL:    fmt.Sprintf("registry.cluster:5000/%s", testID), // Unique registry namespace
+		Test: &types.TestConfig{
+			EntryPoint: true,
+			Env: map[string]string{
+				"WORLD": "Claude", // This should make the output "Hello Claude" instead of "Hello World"
+			},
+		},
+	}
+
+	jobID, err := submitJob(serviceURL, jobConfig)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job submission failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to submit job: %v", err)
+	}
+	result.JobID = jobID
+	t.Logf("Job submitted with ID: %s (testID: %s)", jobID, testID)
+
+	// Step 3: Monitor job until completion with extended timeout
+	t.Log("Monitoring job progress...")
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 15*time.Minute)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job monitoring failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to monitor job: %v", err)
+	}
+	t.Logf("Job completed with status: %s", finalStatus)
+
+	// Step 4: Retrieve logs
+	t.Log("Retrieving job logs...")
+	logs, err := getJobLogs(serviceURL, jobID)
+	if err != nil {
+		result.Error = fmt.Sprintf("Log retrieval failed: %v", err)
+		t.Logf("Warning: Failed to retrieve logs via API: %v", err)
+	} else {
+		result.BuildLogs = logs.Build
+		result.TestLogs = logs.Test
+	}
+
+	// If job failed, print the logs
+	if finalStatus == types.StatusFailed {
+		t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
+
+		if len(result.BuildLogs) > 0 {
+			t.Log("=== BUILD LOGS ===")
+			for _, line := range result.BuildLogs {
+				t.Logf("BUILD: %s", line)
+			}
+		}
+
+		if len(result.TestLogs) > 0 {
+			t.Log("=== TEST LOGS ===")
+			for _, line := range result.TestLogs {
+				t.Logf("TEST: %s", line)
+			}
+		}
+		t.Log("=== END FAILURE LOGS ===")
+	}
+
+	// Step 5: Verify environment variable worked
+	endTime := time.Now()
+
+	// Check if build succeeded
+	buildSucceeded := false
+	if len(result.BuildLogs) > 0 {
+		for _, line := range result.BuildLogs {
+			if strings.Contains(line, "Build completed successfully") ||
+			   strings.Contains(line, "Successfully tagged") {
+				buildSucceeded = true
+				break
+			}
+		}
+	}
+	result.BuildSuccess = buildSucceeded
+
+	// Check if test succeeded AND environment variable was used
+	testSucceeded := false
+	envVarWorked := false
+	if len(result.TestLogs) > 0 && finalStatus == types.StatusSucceeded {
+		testSucceeded = true
+
+		// Look for the environment variable output in test logs
+		for _, line := range result.TestLogs {
+			t.Logf("TEST LOG: %s", line) // Log all test output for debugging
+
+			if strings.Contains(line, "Hello Claude") {
+				envVarWorked = true
+				t.Log("✅ Found 'Hello Claude' in test logs - environment variable working!")
+			}
+
+			if strings.Contains(line, "Hello World") && !strings.Contains(line, "Hello Claude") {
+				t.Log("⚠️  Found 'Hello World' (default) - environment variable may not be working")
+			}
+
+			// Check for error indicators
+			if strings.Contains(line, "Error:") || strings.Contains(line, "failed") {
+				testSucceeded = false
+			}
+		}
+	}
+	result.TestSuccess = testSucceeded
+
+	result.Timestamp["job_end"] = endTime.UTC().Format(time.RFC3339)
+	result.Duration["total"] = time.Since(startTime).String()
+
+	// Step 6: Save detailed logs to files
+	if len(result.BuildLogs) > 0 {
+		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_%s_%s.txt", testID, jobID))
+		err = saveLogsToFile(buildLogFile, result.BuildLogs)
+		require.NoError(t, err, "Failed to save build logs")
+		t.Logf("Build logs saved to: %s", buildLogFile)
+	}
+
+	if len(result.TestLogs) > 0 {
+		testLogFile := filepath.Join(resultsDir, fmt.Sprintf("test_logs_%s_%s.txt", testID, jobID))
+		err = saveLogsToFile(testLogFile, result.TestLogs)
+		require.NoError(t, err, "Failed to save test logs")
+		t.Logf("Test logs saved to: %s", testLogFile)
+	}
+
+	// Step 7: Save test result summary
+	saveTestResult(t, resultsDir, result)
+
+	// Step 8: Assert test results
+	if len(result.BuildLogs) == 0 && finalStatus == types.StatusSucceeded {
+		result.BuildSuccess = true
+	}
+	assert.True(t, result.BuildSuccess, "Build should succeed")
+	assert.True(t, result.TestSuccess, "Test should succeed")
+	assert.Equal(t, types.StatusSucceeded, finalStatus, "Job should complete successfully")
+	assert.True(t, envVarWorked, "Test logs should contain 'Hello Claude' proving environment variable was passed correctly")
+
+	t.Logf("Environment variable test completed successfully in %s", result.Duration["total"])
+}
+
 // TestBuildWorkflowNoTests tests the optimization where no tests are configured
 // and build pushes directly to final image tags
 func TestBuildWorkflowNoTests(t *testing.T) {
@@ -452,12 +627,17 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 func TestSequential(t *testing.T) {
 	// This test orchestrates running other tests sequentially
 	// to avoid concurrent registry conflicts
-	
+
 	t.Run("BuildWorkflow", func(t *testing.T) {
 		// Run the standard build workflow test
 		TestBuildWorkflow(t)
 	})
-	
+
+	t.Run("BuildWorkflowWithEnv", func(t *testing.T) {
+		// Run the environment variable test
+		TestBuildWorkflowWithEnv(t)
+	})
+
 	t.Run("BuildWorkflowNoTests", func(t *testing.T) {
 		// Run the no-tests optimization test after the first one completes
 		TestBuildWorkflowNoTests(t)
