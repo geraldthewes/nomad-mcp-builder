@@ -815,11 +815,7 @@ func durationPtr(d string) *time.Duration {
 // buildTemplates creates Vault templates for a job, conditionally including registry credentials
 func buildTemplates(job *types.Job) []*nomadapi.Template {
 	var templates []*nomadapi.Template
-	
-	// Debug logging
-	fmt.Printf("DEBUG: buildTemplates - GitCredentialsPath: '%s', RegistryCredentialsPath: '%s'\n", 
-		job.Config.GitCredentialsPath, job.Config.RegistryCredentialsPath)
-	
+
 	// Only add git credentials template if path is provided and not empty
 	if job.Config.GitCredentialsPath != "" {
 		gitTemplate := &nomadapi.Template{
