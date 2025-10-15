@@ -623,6 +623,170 @@ func TestBuildWorkflowNoTests(t *testing.T) {
 	t.Logf("No-tests optimization test completed successfully in %s", result.Duration["total"])
 }
 
+// TestBuildWorkflowGPU tests GPU configuration (skips if no GPU nodes available)
+func TestBuildWorkflowGPU(t *testing.T) {
+	// This test demonstrates GPU configuration but skips if no GPU nodes are available
+	// Enable by ensuring cluster has GPU nodes with meta.gpu-capable=true
+
+	// Check if GPU testing is enabled
+	if os.Getenv("ENABLE_GPU_TESTS") != "true" {
+		t.Skip("GPU tests require ENABLE_GPU_TESTS=true and GPU-capable Nomad nodes")
+	}
+
+	// Serialize tests to avoid registry conflicts
+	globalTestMutex.Lock()
+	defer globalTestMutex.Unlock()
+
+	// Create results directory
+	resultsDir := "test_results"
+	err := os.MkdirAll(resultsDir, 0755)
+	require.NoError(t, err, "Failed to create results directory")
+
+	startTime := time.Now()
+	result := TestResult{
+		Timestamp: make(map[string]string),
+		Duration:  make(map[string]string),
+	}
+	result.Timestamp["start"] = startTime.UTC().Format(time.RFC3339)
+
+	// Generate unique test identifier
+	testID := fmt.Sprintf("gpu-test-%d", time.Now().Unix())
+
+	// Step 1: Discover service URL via Consul
+	t.Log("Discovering nomad-build-service via Consul...")
+	serviceURL, err := discoverServiceURL()
+	if err != nil {
+		result.Error = fmt.Sprintf("Service discovery failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to discover service: %v", err)
+	}
+	t.Logf("Discovered service at: %s", serviceURL)
+
+	// Step 2: Submit build job with GPU configuration
+	t.Log("Submitting build job with GPU configuration...")
+	jobConfig := types.JobConfig{
+		Owner:          "test",
+		RepoURL:        "https://github.com/geraldthewes/docker-build-hello-world.git",
+		GitRef:         "main",
+		DockerfilePath: "Dockerfile",
+		ImageName:      fmt.Sprintf("hello-world-%s", testID),
+		ImageTags:      []string{"gpu-test"},
+		RegistryURL:    fmt.Sprintf("registry.cluster:5000/%s", testID),
+		Test: &types.TestConfig{
+			EntryPoint:  true,
+			GPURequired: true,  // Enable GPU runtime
+			GPUCount:    1,     // Allocate 1 GPU
+			Env: map[string]string{
+				"NVIDIA_VISIBLE_DEVICES": "all",
+				"TEST_MODE":              "gpu",
+			},
+		},
+	}
+
+	jobID, err := submitJob(serviceURL, jobConfig)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job submission failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to submit job: %v", err)
+	}
+	result.JobID = jobID
+	t.Logf("Job submitted with ID: %s (testID: %s)", jobID, testID)
+
+	// Step 3: Monitor job until completion
+	t.Log("Monitoring job progress...")
+	finalStatus, err := monitorJobUntilComplete(serviceURL, jobID, 15*time.Minute)
+	if err != nil {
+		result.Error = fmt.Sprintf("Job monitoring failed: %v", err)
+		saveTestResult(t, resultsDir, result)
+		t.Fatalf("Failed to monitor job: %v", err)
+	}
+	t.Logf("Job completed with status: %s", finalStatus)
+
+	// Step 4: Retrieve logs
+	t.Log("Retrieving job logs...")
+	logs, err := getJobLogs(serviceURL, jobID)
+	if err != nil {
+		result.Error = fmt.Sprintf("Log retrieval failed: %v", err)
+		t.Logf("Warning: Failed to retrieve logs via API: %v", err)
+	} else {
+		result.BuildLogs = logs.Build
+		result.TestLogs = logs.Test
+	}
+
+	// If job failed, print the logs
+	if finalStatus == types.StatusFailed {
+		t.Log("=== JOB FAILED - DISPLAYING AVAILABLE LOGS ===")
+
+		if len(result.BuildLogs) > 0 {
+			t.Log("=== BUILD LOGS ===")
+			for _, line := range result.BuildLogs {
+				t.Logf("BUILD: %s", line)
+			}
+		}
+
+		if len(result.TestLogs) > 0 {
+			t.Log("=== TEST LOGS ===")
+			for _, line := range result.TestLogs {
+				t.Logf("TEST: %s", line)
+			}
+		}
+		t.Log("=== END FAILURE LOGS ===")
+	}
+
+	// Step 5: Determine success/failure
+	endTime := time.Now()
+
+	buildSucceeded := false
+	if len(result.BuildLogs) > 0 {
+		for _, line := range result.BuildLogs {
+			if strings.Contains(line, "Build completed successfully") ||
+				strings.Contains(line, "Successfully tagged") {
+				buildSucceeded = true
+				break
+			}
+		}
+	}
+	result.BuildSuccess = buildSucceeded
+
+	testSucceeded := false
+	if len(result.TestLogs) > 0 && finalStatus == types.StatusSucceeded {
+		testSucceeded = true
+	}
+	result.TestSuccess = testSucceeded
+
+	result.Timestamp["job_end"] = endTime.UTC().Format(time.RFC3339)
+	result.Duration["total"] = time.Since(startTime).String()
+
+	// Step 6: Save logs
+	if len(result.BuildLogs) > 0 {
+		buildLogFile := filepath.Join(resultsDir, fmt.Sprintf("build_logs_%s_%s.txt", testID, jobID))
+		err = saveLogsToFile(buildLogFile, result.BuildLogs)
+		require.NoError(t, err, "Failed to save build logs")
+		t.Logf("Build logs saved to: %s", buildLogFile)
+	}
+
+	if len(result.TestLogs) > 0 {
+		testLogFile := filepath.Join(resultsDir, fmt.Sprintf("test_logs_%s_%s.txt", testID, jobID))
+		err = saveLogsToFile(testLogFile, result.TestLogs)
+		require.NoError(t, err, "Failed to save test logs")
+		t.Logf("Test logs saved to: %s", testLogFile)
+	}
+
+	// Step 7: Save test result
+	saveTestResult(t, resultsDir, result)
+
+	// Step 8: Assert test results
+	if len(result.BuildLogs) == 0 && finalStatus == types.StatusSucceeded {
+		result.BuildSuccess = true
+	}
+	assert.True(t, result.BuildSuccess, "Build should succeed")
+	assert.True(t, result.TestSuccess, "Test should succeed")
+	assert.Equal(t, types.StatusSucceeded, finalStatus, "Job should complete successfully")
+
+	t.Logf("GPU test completed successfully in %s", result.Duration["total"])
+	t.Log("NOTE: This test validates that GPU configuration is properly applied to test jobs")
+}
+
 // TestSequential ensures tests run one at a time to avoid registry conflicts
 func TestSequential(t *testing.T) {
 	// This test orchestrates running other tests sequentially

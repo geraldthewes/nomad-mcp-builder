@@ -20,6 +20,13 @@ type VaultSecret struct {
 	Fields map[string]string `json:"fields" yaml:"fields"`   // Field mappings: {"vault_field": "ENV_VAR_NAME"}
 }
 
+// Constraint defines a Nomad job constraint for node selection
+type Constraint struct {
+	Attribute string `json:"attribute" yaml:"attribute"` // Node attribute to match (e.g., "${meta.gpu-capable}")
+	Value     string `json:"value" yaml:"value"`         // Expected value
+	Operand   string `json:"operand" yaml:"operand"`     // Comparison operator: "=", "!=", "regexp", etc.
+}
+
 // TestConfig represents test phase configuration
 type TestConfig struct {
 	Commands       []string               `json:"commands,omitempty" yaml:"commands,omitempty"`             // Custom test commands to run
@@ -29,6 +36,9 @@ type TestConfig struct {
 	VaultPolicies  []string               `json:"vault_policies,omitempty" yaml:"vault_policies,omitempty"` // Vault policies required to access secrets
 	ResourceLimits *PhaseResourceLimits   `json:"resource_limits,omitempty" yaml:"resource_limits,omitempty"` // Test phase resource limits
 	Timeout        *time.Duration         `json:"timeout,omitempty" yaml:"timeout,omitempty"`               // Test phase timeout
+	GPURequired    bool                   `json:"gpu_required,omitempty" yaml:"gpu_required,omitempty"`     // Enable GPU runtime (nvidia) for test containers
+	GPUCount       int                    `json:"gpu_count,omitempty" yaml:"gpu_count,omitempty"`           // Number of GPUs to allocate (0 = all available)
+	Constraints    []Constraint           `json:"constraints,omitempty" yaml:"constraints,omitempty"`       // Custom node constraints for test job placement
 }
 
 // JobConfig represents the configuration for a build job

@@ -416,4 +416,12 @@ Requires:
 - New features or removed features
 - Deployment or testing procedure changes
 
-**Before committing any changes, always verify that README.md accurately reflects the current state of the codebase.**
+**CRITICAL**: Whenever you make changes to the job specification (JobConfig, TestConfig, or any related types in pkg/types/job.go), you MUST update docs/JobSpec.md to reflect those changes. The JobSpec.md is the comprehensive job configuration reference and must accurately document:
+- New configuration fields or parameters
+- Changes to existing fields (types, defaults, behavior)
+- New validation rules or constraints
+- New examples demonstrating the features
+- GPU configuration and hardware requirements
+- Node constraint options
+
+**Before committing any changes, always verify that both README.md and docs/JobSpec.md accurately reflect the current state of the codebase.**

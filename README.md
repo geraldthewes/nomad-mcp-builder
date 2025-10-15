@@ -374,6 +374,81 @@ The service validates:
 - Each secret must have at least one field mapping
 - Field names and environment variable names cannot be empty
 
+### GPU-Accelerated Test Configuration
+
+The build service supports running tests on GPU-enabled Nomad nodes for machine learning, video processing, and other GPU-accelerated workloads.
+
+#### GPU Configuration Fields
+
+Configure GPU support in the `test` section:
+
+```yaml
+test:
+  gpu_required: true      # Enable NVIDIA GPU runtime
+  gpu_count: 2            # Allocate specific number of GPUs (0 = use 1 GPU)
+  entry_point: true
+  env:
+    NVIDIA_VISIBLE_DEVICES: "all"
+    CUDA_VISIBLE_DEVICES: "0,1"
+```
+
+#### Requirements
+
+- **Nomad Cluster**: Nodes must be configured with NVIDIA device plugins
+- **Docker Driver**: Must support NVIDIA runtime (`runtime = "nvidia"`)
+- **Node Metadata**: GPU-capable nodes must have `meta.gpu-capable = "true"` set
+- **GPU Drivers**: NVIDIA drivers installed on Nomad clients
+
+#### Complete GPU Example
+
+```yaml
+owner: ai-team
+repo_url: https://github.com/myorg/video-transcription.git
+git_ref: main
+dockerfile_path: Dockerfile
+image_name: video-transcription-batch
+image_tags: [latest]
+registry_url: registry.cluster:5000
+
+test:
+  entry_point: true
+  gpu_required: true
+  gpu_count: 1  # Allocate 1 GPU for testing
+  env:
+    S3_TRANSCRIBER_BUCKET: "ai-storage"
+    OLLAMA_HOST: "http://10.0.1.12:11434"
+    NVIDIA_VISIBLE_DEVICES: "all"
+  vault_policies:
+    - ml-secrets-policy
+  vault_secrets:
+    - path: "secret/data/ml/api-keys"
+      fields:
+        api_key: "ML_API_KEY"
+  resource_limits:
+    cpu: "8000"
+    memory: "16384"
+    disk: "20480"
+```
+
+### Node Constraints for Test Jobs
+
+For advanced node selection, you can specify custom Nomad constraints:
+
+```yaml
+test:
+  commands:
+    - /app/run-tests.sh
+  constraints:
+    - attribute: "${node.datacenter}"
+      value: "us-west-2"
+      operand: "="
+    - attribute: "${meta.storage-type}"
+      value: "ssd"
+      operand: "="
+```
+
+**Available Operators**: `"="`, `"!="`, `"regexp"`, `">="`, `"<="`, `">"`, `"<"`, `"version"`, `"is_set"`, `"is_not_set"`
+
 ### Local Build History
 
 The CLI supports optional local build history tracking via the `--history` flag. When enabled, it creates a structured directory of build records for debugging and tracking.

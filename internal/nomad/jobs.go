@@ -316,6 +316,9 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 	// Create temporary image name - this is the image built in the build phase
 	tempImageName := nc.generateTempImageName(job)
 
+	// Build constraints for test jobs
+	constraints := nc.buildTestConstraints(job, buildNodeID)
+
 	// Mode 1: Create separate test jobs for each custom test command
 	if len(job.Config.Test.Commands) > 0 {
 		for i, testCmd := range job.Config.Test.Commands {
@@ -339,43 +342,26 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 					{
 						Name:        stringPtr("test"),
 						Count:       intPtr(1),
-						Constraints: func() []*nomadapi.Constraint {
-							if buildNodeID != "" {
-								// Prevent test jobs from running on the same node as build job to avoid Docker layer conflicts
-								return []*nomadapi.Constraint{
-									{
-										LTarget: "${node.unique.id}",
-										RTarget: buildNodeID,
-										Operand: "!=",
-									},
-								}
-							}
-							return []*nomadapi.Constraint{} // No constraints if buildNodeID is empty
-						}(),
+						Constraints: constraints,
 						RestartPolicy: &nomadapi.RestartPolicy{
 							Attempts: intPtr(0), // No retries for test failures
 						},
+						ReschedulePolicy: &nomadapi.ReschedulePolicy{
+							Attempts:  intPtr(0),
+							Unlimited: boolPtr(false),
+						},
 						Tasks: []*nomadapi.Task{
 							{
-								Name:   "main",
-								Driver: "docker",
-								Config: map[string]interface{}{
-									"image":   tempImageName,  // Use the built image directly
-									"command": "sh",
-									"args":    []string{"-c", testCmd},
-									"force_pull": true, // Force Docker to always pull fresh image to avoid layer conflicts
-									// Add registry certificates for private registries
-									"volumes": []string{
-										"/etc/docker/certs.d:/etc/docker/certs.d:ro",
-									},
-								},
-								Env: job.Config.Test.Env, // Add test environment variables
-								Resources: &nomadapi.Resources{
-									CPU:      intPtr(cpu),
-									MemoryMB: intPtr(memory),
-									DiskMB:   intPtr(disk),
-								},
+								Name:        "main",
+								Driver:      "docker",
+								Config:      nc.configureTestDockerConfig(job, tempImageName, testCmd),
+								Env:         job.Config.Test.Env, // Add test environment variables
+								Resources:   nc.buildTestResources(job, cpu, memory, disk),
 								KillTimeout: &nc.config.Build.KillTimeout,
+								LogConfig: &nomadapi.LogConfig{
+									MaxFiles:      intPtr(nc.config.Build.DockerLogMaxFiles),
+									MaxFileSizeMB: intPtr(10),
+								},
 							},
 						},
 						EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -432,41 +418,26 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 				{
 					Name:        stringPtr("test"),
 					Count:       intPtr(1),
-					Constraints: func() []*nomadapi.Constraint {
-						if buildNodeID != "" {
-							// Prevent test jobs from running on the same node as build job to avoid Docker layer conflicts
-							return []*nomadapi.Constraint{
-								{
-									LTarget: "${node.unique.id}",
-									RTarget: buildNodeID,
-									Operand: "!=",
-								},
-							}
-						}
-						return []*nomadapi.Constraint{} // No constraints if buildNodeID is empty
-					}(),
+					Constraints: constraints,
 					RestartPolicy: &nomadapi.RestartPolicy{
 						Attempts: intPtr(0), // No retries for test failures
 					},
+					ReschedulePolicy: &nomadapi.ReschedulePolicy{
+						Attempts:  intPtr(0),
+						Unlimited: boolPtr(false),
+					},
 					Tasks: []*nomadapi.Task{
 						{
-							Name:   "main",
-							Driver: "docker",
-							Config: map[string]interface{}{
-								"image": tempImageName, // Use the built image directly - no command/args means use ENTRYPOINT/CMD
-								"force_pull": true, // Force Docker to always pull fresh image to avoid layer conflicts
-								// Add registry certificates for private registries
-								"volumes": []string{
-									"/etc/docker/certs.d:/etc/docker/certs.d:ro",
-								},
-							},
-							Env: job.Config.Test.Env, // Add test environment variables
-							Resources: &nomadapi.Resources{
-								CPU:      intPtr(cpu),
-								MemoryMB: intPtr(memory),
-								DiskMB:   intPtr(disk),
-							},
+							Name:        "main",
+							Driver:      "docker",
+							Config:      nc.configureTestDockerConfig(job, tempImageName, ""), // Empty testCmd for entrypoint
+							Env:         job.Config.Test.Env, // Add test environment variables
+							Resources:   nc.buildTestResources(job, cpu, memory, disk),
 							KillTimeout: &nc.config.Build.KillTimeout,
+							LogConfig: &nomadapi.LogConfig{
+								MaxFiles:      intPtr(nc.config.Build.DockerLogMaxFiles),
+								MaxFileSizeMB: intPtr(10),
+							},
 						},
 					},
 					EphemeralDisk: &nomadapi.EphemeralDisk{
@@ -984,4 +955,106 @@ func registryHost(imageName string) string {
 		return parts[0]
 	}
 	return "docker.io" // default to Docker Hub if no registry specified
+}
+
+// buildTestConstraints builds the constraint list for test jobs
+func (nc *Client) buildTestConstraints(job *types.Job, buildNodeID string) []*nomadapi.Constraint {
+	var constraints []*nomadapi.Constraint
+
+	// Add build node avoidance constraint if build node ID is provided
+	if buildNodeID != "" {
+		constraints = append(constraints, &nomadapi.Constraint{
+			LTarget: "${node.unique.id}",
+			RTarget: buildNodeID,
+			Operand: "!=",
+		})
+	}
+
+	// Add GPU capability constraint if GPU is required
+	if job.Config.Test != nil && job.Config.Test.GPURequired {
+		constraints = append(constraints, &nomadapi.Constraint{
+			LTarget: "${meta.gpu-capable}",
+			RTarget: "true",
+			Operand: "=",
+		})
+	}
+
+	// Add custom constraints from test configuration
+	if job.Config.Test != nil && len(job.Config.Test.Constraints) > 0 {
+		for _, c := range job.Config.Test.Constraints {
+			constraints = append(constraints, &nomadapi.Constraint{
+				LTarget: c.Attribute,
+				RTarget: c.Value,
+				Operand: c.Operand,
+			})
+		}
+	}
+
+	return constraints
+}
+
+// configureTestDockerConfig configures the Docker config for test tasks
+func (nc *Client) configureTestDockerConfig(job *types.Job, tempImageName string, testCmd string) map[string]interface{} {
+	config := map[string]interface{}{
+		"image":      tempImageName,
+		"force_pull": true, // Force Docker to always pull fresh image
+		"volumes": []string{
+			"/etc/docker/certs.d:/etc/docker/certs.d:ro",
+		},
+	}
+
+	// Add command if provided
+	if testCmd != "" {
+		config["command"] = "sh"
+		config["args"] = []string{"-c", testCmd}
+	}
+
+	// Add GPU runtime if required
+	if job.Config.Test != nil && job.Config.Test.GPURequired {
+		config["runtime"] = "nvidia"
+	}
+
+	// Add Docker logging configuration
+	config["logging"] = map[string]interface{}{
+		"type": "json-file",
+		"config": []map[string]interface{}{
+			{
+				"max-file": fmt.Sprintf("%d", nc.config.Build.DockerLogMaxFiles),
+				"max-size": nc.config.Build.DockerLogMaxFileSize,
+			},
+		},
+	}
+
+	return config
+}
+
+// buildTestResources builds the Resources specification for test tasks including GPU devices
+func (nc *Client) buildTestResources(job *types.Job, cpu, memory, disk int) *nomadapi.Resources {
+	resources := &nomadapi.Resources{
+		CPU:      intPtr(cpu),
+		MemoryMB: intPtr(memory),
+		DiskMB:   intPtr(disk),
+	}
+
+	// Add GPU device allocation if GPU is required
+	if job.Config.Test != nil && job.Config.Test.GPURequired {
+		gpuCount := job.Config.Test.GPUCount
+		if gpuCount == 0 {
+			gpuCount = 1 // Default to 1 GPU if not specified
+		}
+
+		resources.Devices = []*nomadapi.RequestedDevice{
+			{
+				Name:  "nvidia/gpu",
+				Count: uint64Ptr(uint64(gpuCount)),
+			},
+		}
+	}
+
+	return resources
+}
+
+// uint64Ptr returns a pointer to a uint64
+func uint64Ptr(i uint64) *uint64 {
+	return &i
 }
