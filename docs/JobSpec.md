@@ -166,13 +166,44 @@ Each vault secret has two required fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `path` | string | Vault secret path (KV v2 format: `secret/data/...`) |
-| `fields` | map[string]string | Mapping of Vault fields to environment variables |
+| `fields` | map[string]string | Mapping of Vault field names to container environment variable names |
+
+**Field Mapping Syntax**:
+
+The `fields` map uses this format:
+```yaml
+fields:
+  <vault_field_name>: "<CONTAINER_ENV_VAR_NAME>"
+```
+
+- **LEFT side** (key): The field name **stored in Vault**
+- **RIGHT side** (value): The environment variable name **set in the Docker container**
+
+**Example**:
+```yaml
+vault_secrets:
+  - path: "secret/data/ml/api-keys"
+    fields:
+      openai_key: "OPENAI_API_KEY"        # Vault field "openai_key" → Container env var OPENAI_API_KEY
+      anthropic_key: "ANTHROPIC_API_KEY"  # Vault field "anthropic_key" → Container env var ANTHROPIC_API_KEY
+```
+
+If you stored secrets in Vault like this:
+```bash
+vault kv put secret/ml/api-keys \
+  openai_key="sk-proj-abc123..." \
+  anthropic_key="sk-ant-xyz789..."
+```
+
+Then your test container will receive these environment variables:
+- `OPENAI_API_KEY=sk-proj-abc123...`
+- `ANTHROPIC_API_KEY=sk-ant-xyz789...`
 
 **How It Works**:
 
 1. The build service creates Vault templates for each secret source
 2. During test execution, Vault automatically injects secrets as environment variables
-3. Test containers receive the environment variables (e.g., `AWS_ACCESS_KEY_ID`)
+3. Test containers receive the environment variables with the names you specified
 4. Secrets are never logged or exposed in job configurations
 
 **Requirements**:
@@ -186,30 +217,33 @@ Each vault secret has two required fields:
 
 ```yaml
 # AWS credentials
+# Vault storage: vault kv put secret/aws/s3-credentials access_key="AKIA..." secret_key="..."
 test:
   vault_policies: ["aws-policy"]
   vault_secrets:
     - path: "secret/data/aws/s3-credentials"
       fields:
-        access_key: "AWS_ACCESS_KEY_ID"
+        access_key: "AWS_ACCESS_KEY_ID"        # LEFT=Vault field, RIGHT=Container env var
         secret_key: "AWS_SECRET_ACCESS_KEY"
 
 # Machine Learning API tokens
+# Vault storage: vault kv put secret/ml/api-keys openai_key="sk-..." anthropic_key="sk-ant-..."
 test:
   vault_policies: ["ml-api-policy"]
   vault_secrets:
     - path: "secret/data/ml/api-keys"
       fields:
-        openai_key: "OPENAI_API_KEY"
+        openai_key: "OPENAI_API_KEY"           # LEFT=Vault field, RIGHT=Container env var
         anthropic_key: "ANTHROPIC_API_KEY"
 
 # Database credentials
+# Vault storage: vault kv put secret/postgres/test-db username="user" password="pass" host="db.example.com"
 test:
   vault_policies: ["database-test-policy"]
   vault_secrets:
     - path: "secret/data/postgres/test-db"
       fields:
-        username: "DB_USER"
+        username: "DB_USER"                    # LEFT=Vault field, RIGHT=Container env var
         password: "DB_PASSWORD"
         host: "DB_HOST"
 ```
@@ -556,25 +590,47 @@ vault kv put secret/nomad/jobs/registry-credentials \
 
 ### Test Phase Secrets
 
-Store secrets for test containers at paths referenced in `test.vault_secrets`:
+Store secrets for test containers at paths referenced in `test.vault_secrets`.
+
+**IMPORTANT**: The field names you use in `vault kv put` (left side) must match the field names in your YAML configuration's `fields` mapping (left side of the mapping).
 
 ```bash
 # AWS credentials for test phase
+# Field names: access_key_id, secret_access_key, region
 vault kv put secret/aws/transcription \
   access_key_id="AKIA..." \
   secret_access_key="..." \
   region="us-east-1"
 
 # ML API tokens
+# Field names: hf_token, openai_key
 vault kv put secret/ml/tokens \
   hf_token="hf_..." \
   openai_key="sk-..."
 
 # Database credentials
+# Field names: username, password, host
 vault kv put secret/postgres/test-db \
   username="testuser" \
   password="testpass" \
   host="postgres.example.com"
+```
+
+**Example YAML configuration using these secrets**:
+```yaml
+test:
+  vault_policies:
+    - transcription-policy
+  vault_secrets:
+    - path: "secret/data/aws/transcription"
+      fields:
+        access_key_id: "AWS_ACCESS_KEY_ID"        # Vault field → Container env var
+        secret_access_key: "AWS_SECRET_ACCESS_KEY"
+        region: "AWS_DEFAULT_REGION"
+    - path: "secret/data/ml/tokens"
+      fields:
+        hf_token: "HUGGING_FACE_HUB_TOKEN"
+        openai_key: "OPENAI_API_KEY"
 ```
 
 **Important**: Create corresponding Vault policies that grant read access to these paths, and specify those policy names in `test.vault_policies`.
