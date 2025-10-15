@@ -884,18 +884,17 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 func generateVaultSecretTemplate(secret types.VaultSecret, index int) *nomadapi.Template {
 	var tmplData strings.Builder
 	tmplData.WriteString(fmt.Sprintf("{{- with secret \"%s\" -}}\n", secret.Path))
-	
+
 	for vaultField, envVar := range secret.Fields {
-		tmplData.WriteString(fmt.Sprintf("%s = \"{{ .Data.data.%s }}\"\n", envVar, vaultField))
+		tmplData.WriteString(fmt.Sprintf("export %s=\"{{ .Data.data.%s }}\"\n", envVar, vaultField))
 	}
-	
+
 	tmplData.WriteString("{{- end -}}")
-	
+
 	return &nomadapi.Template{
-		DestPath:     stringPtr(fmt.Sprintf("/secrets/vault-%d.env", index)),
+		DestPath:     stringPtr(fmt.Sprintf("secrets/vault-%d.env", index)),
 		ChangeMode:   stringPtr("restart"),
 		EmbeddedTmpl: stringPtr(tmplData.String()),
-		Envvars:      boolPtr(true), // Make secrets available as env vars
 	}
 }
 
