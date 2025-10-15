@@ -1290,6 +1290,36 @@ func (s *Server) mcpSubmitJob(id interface{}, args map[string]interface{}) MCPRe
 				}
 			}
 
+			// Parse vault secrets
+			if vaultSecretsInterface, ok := testMap["vault_secrets"].([]interface{}); ok {
+				for _, secretInterface := range vaultSecretsInterface {
+					if secretMap, ok := secretInterface.(map[string]interface{}); ok {
+						vaultSecret := types.VaultSecret{}
+						if path, ok := secretMap["path"].(string); ok {
+							vaultSecret.Path = path
+						}
+						if fieldsInterface, ok := secretMap["fields"].(map[string]interface{}); ok {
+							vaultSecret.Fields = make(map[string]string)
+							for key, value := range fieldsInterface {
+								if valueStr, ok := value.(string); ok {
+									vaultSecret.Fields[key] = valueStr
+								}
+							}
+						}
+						testConfig.VaultSecrets = append(testConfig.VaultSecrets, vaultSecret)
+					}
+				}
+			}
+
+			// Parse vault policies
+			if vaultPoliciesInterface, ok := testMap["vault_policies"].([]interface{}); ok {
+				for _, policy := range vaultPoliciesInterface {
+					if policyStr, ok := policy.(string); ok {
+						testConfig.VaultPolicies = append(testConfig.VaultPolicies, policyStr)
+					}
+				}
+			}
+
 			jobConfig.Test = testConfig
 		}
 	}
@@ -1555,6 +1585,30 @@ func validateJobConfig(config *types.JobConfig) error {
 		}
 		// Validate env is a valid map (Go already enforces this at unmarshal time)
 		// No additional validation needed for env variables
+
+		// Validate vault secrets configuration
+		if len(config.Test.VaultSecrets) > 0 {
+			// If vault secrets are provided, vault policies must be specified
+			if len(config.Test.VaultPolicies) == 0 {
+				return fmt.Errorf("vault_policies is required when vault_secrets are specified")
+			}
+
+			// Validate each vault secret
+			for i, secret := range config.Test.VaultSecrets {
+				if secret.Path == "" {
+					return fmt.Errorf("vault_secrets[%d]: path is required", i)
+				}
+				if len(secret.Fields) == 0 {
+					return fmt.Errorf("vault_secrets[%d]: fields map cannot be empty", i)
+				}
+				// Validate field mappings
+				for vaultField, envVar := range secret.Fields {
+					if vaultField == "" || envVar == "" {
+						return fmt.Errorf("vault_secrets[%d]: invalid field mapping (empty field or env var)", i)
+					}
+				}
+			}
+		}
 	}
 
 	// Optional fields (git_credentials_path, registry_credentials_path, test, image_tags)

@@ -2,6 +2,7 @@ package unit
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -190,6 +191,140 @@ func TestMCPServerValidationConsistency(t *testing.T) {
 				"image_name":   "test-app",
 				"image_tags":   "v1.2.3",
 				"registry_url": "registry.example.com/test-app",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_with_vault_secrets",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"entry_point": true,
+					"vault_policies": []interface{}{"transcription-policy"},
+					"vault_secrets": []interface{}{
+						map[string]interface{}{
+							"path": "secret/data/aws/transcription",
+							"fields": map[string]interface{}{
+								"access_key_id":     "AWS_ACCESS_KEY_ID",
+								"secret_access_key": "AWS_SECRET_ACCESS_KEY",
+							},
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "vault_secrets_without_policies",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"vault_secrets": []interface{}{
+						map[string]interface{}{
+							"path": "secret/data/aws/creds",
+							"fields": map[string]interface{}{
+								"key": "VALUE",
+							},
+						},
+					},
+				},
+			},
+			expectError:    true,
+			expectedErrMsg: "vault_policies is required when vault_secrets are specified",
+		},
+		{
+			name: "vault_secrets_with_empty_path",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"vault_policies": []interface{}{"test-policy"},
+					"vault_secrets": []interface{}{
+						map[string]interface{}{
+							"path": "",
+							"fields": map[string]interface{}{
+								"key": "VALUE",
+							},
+						},
+					},
+				},
+			},
+			expectError:    true,
+			expectedErrMsg: "vault_secrets[0]: path is required",
+		},
+		{
+			name: "vault_secrets_with_empty_fields",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"vault_policies": []interface{}{"test-policy"},
+					"vault_secrets": []interface{}{
+						map[string]interface{}{
+							"path":   "secret/data/test",
+							"fields": map[string]interface{}{},
+						},
+					},
+				},
+			},
+			expectError:    true,
+			expectedErrMsg: "vault_secrets[0]: fields map cannot be empty",
+		},
+		{
+			name: "vault_policies_without_secrets",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"vault_policies": []interface{}{"test-policy"},
+					"entry_point":    true,
+				},
+			},
+			expectError: false, // vault_policies without secrets is allowed
+		},
+		{
+			name: "multiple_vault_secrets",
+			mcpArgs: map[string]interface{}{
+				"owner":        "test-org",
+				"repo_url":     "https://github.com/test/repo.git",
+				"image_name":   "test-app",
+				"image_tags":   []interface{}{"latest"},
+				"registry_url": "registry.example.com/test-app",
+				"test": map[string]interface{}{
+					"vault_policies": []interface{}{"aws-policy", "ml-policy"},
+					"vault_secrets": []interface{}{
+						map[string]interface{}{
+							"path": "secret/data/aws/transcription",
+							"fields": map[string]interface{}{
+								"access_key_id": "AWS_ACCESS_KEY_ID",
+								"secret_key":    "AWS_SECRET_ACCESS_KEY",
+							},
+						},
+						map[string]interface{}{
+							"path": "secret/data/ml/tokens",
+							"fields": map[string]interface{}{
+								"hf_token": "HUGGING_FACE_HUB_TOKEN",
+							},
+						},
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -420,11 +555,62 @@ func convertMCPArgsToJobConfig(args map[string]interface{}) *types.JobConfig {
 		testEntryPoint = entryPoint
 	}
 
-	// Create Test config if there are any test settings
-	if len(testCommands) > 0 || testEntryPoint {
-		jobConfig.Test = &types.TestConfig{
-			Commands:   testCommands,
-			EntryPoint: testEntryPoint,
+	// Parse test configuration if present
+	if testInterface, ok := args["test"].(map[string]interface{}); ok {
+		testConfig := &types.TestConfig{}
+
+		// Parse commands
+		if cmdsInterface, ok := testInterface["commands"].([]interface{}); ok {
+			for _, cmd := range cmdsInterface {
+				if cmdStr, ok := cmd.(string); ok {
+					testConfig.Commands = append(testConfig.Commands, cmdStr)
+				}
+			}
+		}
+
+		// Parse entry point
+		if entryPoint, ok := testInterface["entry_point"].(bool); ok {
+			testConfig.EntryPoint = entryPoint
+		}
+
+		// Parse vault policies
+		if policiesInterface, ok := testInterface["vault_policies"].([]interface{}); ok {
+			for _, policy := range policiesInterface {
+				if policyStr, ok := policy.(string); ok {
+					testConfig.VaultPolicies = append(testConfig.VaultPolicies, policyStr)
+				}
+			}
+		}
+
+		// Parse vault secrets
+		if secretsInterface, ok := testInterface["vault_secrets"].([]interface{}); ok {
+			for _, secretInterface := range secretsInterface {
+				if secretMap, ok := secretInterface.(map[string]interface{}); ok {
+					vaultSecret := types.VaultSecret{}
+					if path, ok := secretMap["path"].(string); ok {
+						vaultSecret.Path = path
+					}
+					if fieldsInterface, ok := secretMap["fields"].(map[string]interface{}); ok {
+						vaultSecret.Fields = make(map[string]string)
+						for key, value := range fieldsInterface {
+							if valueStr, ok := value.(string); ok {
+								vaultSecret.Fields[key] = valueStr
+							}
+						}
+					}
+					testConfig.VaultSecrets = append(testConfig.VaultSecrets, vaultSecret)
+				}
+			}
+		}
+
+		jobConfig.Test = testConfig
+	} else {
+		// Legacy: Create Test config from top-level test_ parameters if there are any test settings
+		if len(testCommands) > 0 || testEntryPoint {
+			jobConfig.Test = &types.TestConfig{
+				Commands:   testCommands,
+				EntryPoint: testEntryPoint,
+			}
 		}
 	}
 
@@ -464,6 +650,30 @@ func validateJobConfigStrict(config *types.JobConfig) error {
 	if config.Test != nil {
 		if len(config.Test.Commands) == 0 && !config.Test.EntryPoint {
 			// This is allowed - no testing will be performed
+		}
+
+		// Validate vault secrets configuration
+		if len(config.Test.VaultSecrets) > 0 {
+			// If vault secrets are provided, vault policies must be specified
+			if len(config.Test.VaultPolicies) == 0 {
+				return &ValidationError{"vault_policies is required when vault_secrets are specified"}
+			}
+
+			// Validate each vault secret
+			for i, secret := range config.Test.VaultSecrets {
+				if secret.Path == "" {
+					return &ValidationError{fmt.Sprintf("vault_secrets[%d]: path is required", i)}
+				}
+				if len(secret.Fields) == 0 {
+					return &ValidationError{fmt.Sprintf("vault_secrets[%d]: fields map cannot be empty", i)}
+				}
+				// Validate field mappings
+				for vaultField, envVar := range secret.Fields {
+					if vaultField == "" || envVar == "" {
+						return &ValidationError{fmt.Sprintf("vault_secrets[%d]: invalid field mapping (empty field or env var)", i)}
+					}
+				}
+			}
 		}
 	}
 

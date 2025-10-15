@@ -256,17 +256,186 @@ func TestJobLogs(t *testing.T) {
 		Test:    []string{"Running tests...", "Tests passed"},
 		Publish: []string{"Pushing to registry...", "Push completed"},
 	}
-	
+
 	if len(logs.Build) != 2 {
 		t.Errorf("Expected 2 build log entries, got %d", len(logs.Build))
 	}
-	
+
 	if logs.Build[0] != "Building image..." {
 		t.Errorf("Expected first build log entry, got %s", logs.Build[0])
 	}
-	
+
 	totalLogEntries := len(logs.Build) + len(logs.Test) + len(logs.Publish)
 	if totalLogEntries != 6 {
 		t.Errorf("Expected 6 total log entries, got %d", totalLogEntries)
 	}
+}
+
+func TestVaultSecret(t *testing.T) {
+	t.Run("VaultSecret basic structure", func(t *testing.T) {
+		vaultSecret := types.VaultSecret{
+			Path: "secret/data/aws/transcription",
+			Fields: map[string]string{
+				"access_key_id":     "AWS_ACCESS_KEY_ID",
+				"secret_access_key": "AWS_SECRET_ACCESS_KEY",
+				"region":            "AWS_DEFAULT_REGION",
+			},
+		}
+
+		if vaultSecret.Path != "secret/data/aws/transcription" {
+			t.Errorf("Expected path 'secret/data/aws/transcription', got %s", vaultSecret.Path)
+		}
+
+		if len(vaultSecret.Fields) != 3 {
+			t.Errorf("Expected 3 fields, got %d", len(vaultSecret.Fields))
+		}
+
+		if vaultSecret.Fields["access_key_id"] != "AWS_ACCESS_KEY_ID" {
+			t.Errorf("Expected AWS_ACCESS_KEY_ID mapping, got %s", vaultSecret.Fields["access_key_id"])
+		}
+	})
+
+	t.Run("Multiple VaultSecrets", func(t *testing.T) {
+		secrets := []types.VaultSecret{
+			{
+				Path: "secret/data/aws/creds",
+				Fields: map[string]string{
+					"key": "AWS_KEY",
+				},
+			},
+			{
+				Path: "secret/data/ml/tokens",
+				Fields: map[string]string{
+					"hf_token": "HUGGING_FACE_HUB_TOKEN",
+				},
+			},
+		}
+
+		if len(secrets) != 2 {
+			t.Errorf("Expected 2 secrets, got %d", len(secrets))
+		}
+
+		if secrets[0].Path != "secret/data/aws/creds" {
+			t.Errorf("Expected first secret path 'secret/data/aws/creds', got %s", secrets[0].Path)
+		}
+
+		if secrets[1].Fields["hf_token"] != "HUGGING_FACE_HUB_TOKEN" {
+			t.Errorf("Expected HUGGING_FACE_HUB_TOKEN mapping, got %s", secrets[1].Fields["hf_token"])
+		}
+	})
+}
+
+func TestTestConfigWithVaultSecrets(t *testing.T) {
+	t.Run("TestConfig with vault_secrets", func(t *testing.T) {
+		testConfig := &types.TestConfig{
+			Commands:   []string{"npm test"},
+			EntryPoint: true,
+			Env: map[string]string{
+				"TEST_MODE": "integration",
+			},
+			VaultPolicies: []string{"transcription-policy", "ml-policy"},
+			VaultSecrets: []types.VaultSecret{
+				{
+					Path: "secret/data/aws/transcription",
+					Fields: map[string]string{
+						"access_key_id":     "AWS_ACCESS_KEY_ID",
+						"secret_access_key": "AWS_SECRET_ACCESS_KEY",
+					},
+				},
+				{
+					Path: "secret/data/ml/tokens",
+					Fields: map[string]string{
+						"hf_token": "HUGGING_FACE_HUB_TOKEN",
+					},
+				},
+			},
+		}
+
+		if len(testConfig.Commands) != 1 {
+			t.Errorf("Expected 1 command, got %d", len(testConfig.Commands))
+		}
+
+		if !testConfig.EntryPoint {
+			t.Error("Expected EntryPoint to be true")
+		}
+
+		if len(testConfig.VaultPolicies) != 2 {
+			t.Errorf("Expected 2 vault policies, got %d", len(testConfig.VaultPolicies))
+		}
+
+		if testConfig.VaultPolicies[0] != "transcription-policy" {
+			t.Errorf("Expected first policy 'transcription-policy', got %s", testConfig.VaultPolicies[0])
+		}
+
+		if len(testConfig.VaultSecrets) != 2 {
+			t.Errorf("Expected 2 vault secrets, got %d", len(testConfig.VaultSecrets))
+		}
+
+		if testConfig.VaultSecrets[0].Path != "secret/data/aws/transcription" {
+			t.Errorf("Expected first secret path 'secret/data/aws/transcription', got %s", testConfig.VaultSecrets[0].Path)
+		}
+
+		if testConfig.VaultSecrets[1].Fields["hf_token"] != "HUGGING_FACE_HUB_TOKEN" {
+			t.Errorf("Expected HUGGING_FACE_HUB_TOKEN, got %s", testConfig.VaultSecrets[1].Fields["hf_token"])
+		}
+	})
+
+	t.Run("TestConfig without vault_secrets", func(t *testing.T) {
+		testConfig := &types.TestConfig{
+			Commands:   []string{"make test"},
+			EntryPoint: false,
+			Env: map[string]string{
+				"NODE_ENV": "test",
+			},
+		}
+
+		if len(testConfig.VaultSecrets) != 0 {
+			t.Errorf("Expected 0 vault secrets, got %d", len(testConfig.VaultSecrets))
+		}
+
+		if len(testConfig.VaultPolicies) != 0 {
+			t.Errorf("Expected 0 vault policies, got %d", len(testConfig.VaultPolicies))
+		}
+	})
+
+	t.Run("JobConfig with vault_secrets in test config", func(t *testing.T) {
+		jobConfig := types.JobConfig{
+			Owner:           "test-user",
+			RepoURL:         "https://github.com/test/repo.git",
+			GitRef:          "main",
+			DockerfilePath:  "Dockerfile",
+			ImageName:       "test-app",
+			ImageTags:       []string{"latest"},
+			RegistryURL:     "registry.example.com/test-app",
+			Test: &types.TestConfig{
+				EntryPoint:    true,
+				VaultPolicies: []string{"transcription-policy"},
+				VaultSecrets: []types.VaultSecret{
+					{
+						Path: "secret/data/aws/transcription",
+						Fields: map[string]string{
+							"access_key": "AWS_ACCESS_KEY_ID",
+							"secret_key": "AWS_SECRET_ACCESS_KEY",
+						},
+					},
+				},
+			},
+		}
+
+		if jobConfig.Test == nil {
+			t.Fatal("Expected Test config to be non-nil")
+		}
+
+		if len(jobConfig.Test.VaultPolicies) != 1 {
+			t.Errorf("Expected 1 vault policy, got %d", len(jobConfig.Test.VaultPolicies))
+		}
+
+		if len(jobConfig.Test.VaultSecrets) != 1 {
+			t.Errorf("Expected 1 vault secret, got %d", len(jobConfig.Test.VaultSecrets))
+		}
+
+		if jobConfig.Test.VaultSecrets[0].Path != "secret/data/aws/transcription" {
+			t.Errorf("Expected path 'secret/data/aws/transcription', got %s", jobConfig.Test.VaultSecrets[0].Path)
+		}
+	})
 }

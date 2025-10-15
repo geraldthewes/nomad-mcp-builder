@@ -243,6 +243,137 @@ jobforge submit-job build.yaml --image-tags "latest,stable"
 cat build.yaml | jobforge submit-job
 ```
 
+### Vault Secrets for Test Phase
+
+The test phase supports injecting secrets from HashiCorp Vault as environment variables. This is useful for providing test containers with access to cloud services, API tokens, and other sensitive data without hardcoding credentials.
+
+#### Configuration
+
+To use Vault secrets in your test phase, configure two fields:
+
+1. **`vault_policies`**: List of Vault policies required to access the secrets
+2. **`vault_secrets`**: List of secret sources with field mappings
+
+#### YAML Configuration Example
+
+```yaml
+test:
+  entry_point: true
+  env:
+    TEST_MODE: "integration"
+  vault_policies:
+    - transcription-policy
+  vault_secrets:
+    - path: "secret/data/aws/transcription"
+      fields:
+        access_key_id: "AWS_ACCESS_KEY_ID"
+        secret_access_key: "AWS_SECRET_ACCESS_KEY"
+        region: "AWS_DEFAULT_REGION"
+    - path: "secret/data/ml/tokens"
+      fields:
+        hf_token: "HUGGING_FACE_HUB_TOKEN"
+```
+
+#### JSON Configuration Example
+
+```json
+{
+  "test": {
+    "entry_point": true,
+    "env": {
+      "TEST_MODE": "integration"
+    },
+    "vault_policies": ["transcription-policy"],
+    "vault_secrets": [
+      {
+        "path": "secret/data/aws/transcription",
+        "fields": {
+          "access_key_id": "AWS_ACCESS_KEY_ID",
+          "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+          "region": "AWS_DEFAULT_REGION"
+        }
+      },
+      {
+        "path": "secret/data/ml/tokens",
+        "fields": {
+          "hf_token": "HUGGING_FACE_HUB_TOKEN"
+        }
+      }
+    ]
+  }
+}
+```
+
+#### Field Structure
+
+**`vault_policies`** (required when using vault_secrets):
+- Array of Vault policy names
+- These policies must grant read access to the secret paths specified
+- Example: `["transcription-policy", "ml-tokens-policy"]`
+
+**`vault_secrets`** (optional):
+- Array of secret sources
+- Each secret source has:
+  - **`path`**: Vault secret path (KV v2 format: `secret/data/...`)
+  - **`fields`**: Map of Vault field names to environment variable names
+    - Key: Field name in the Vault secret
+    - Value: Environment variable name to inject into the test container
+
+#### How It Works
+
+1. The build service creates Nomad Vault templates for each secret source
+2. During test execution, Vault automatically injects the secrets as environment variables
+3. Your test container receives the environment variables (e.g., `AWS_ACCESS_KEY_ID`)
+4. Secrets are never logged or exposed in job configurations
+
+#### Example Use Cases
+
+**AWS S3 Access:**
+```yaml
+vault_policies: ["s3-read-policy"]
+vault_secrets:
+  - path: "secret/data/aws/s3-credentials"
+    fields:
+      access_key: "AWS_ACCESS_KEY_ID"
+      secret_key: "AWS_SECRET_ACCESS_KEY"
+```
+
+**Machine Learning APIs:**
+```yaml
+vault_policies: ["ml-api-policy"]
+vault_secrets:
+  - path: "secret/data/ml/api-keys"
+    fields:
+      openai_key: "OPENAI_API_KEY"
+      anthropic_key: "ANTHROPIC_API_KEY"
+```
+
+**Database Credentials:**
+```yaml
+vault_policies: ["database-test-policy"]
+vault_secrets:
+  - path: "secret/data/postgres/test-db"
+    fields:
+      username: "DB_USER"
+      password: "DB_PASSWORD"
+      host: "DB_HOST"
+```
+
+#### Requirements
+
+- Vault policies must be created before use
+- Vault secrets must exist at the specified paths
+- The Nomad cluster must have Vault integration configured
+- Uses Vault KV v2 secret engine (default in modern Vault)
+
+#### Validation
+
+The service validates:
+- `vault_policies` is required when `vault_secrets` are specified
+- Each secret must have a non-empty `path`
+- Each secret must have at least one field mapping
+- Field names and environment variable names cannot be empty
+
 ### Local Build History
 
 The CLI supports optional local build history tracking via the `--history` flag. When enabled, it creates a structured directory of build records for debugging and tracking.

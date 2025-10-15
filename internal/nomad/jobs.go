@@ -385,13 +385,22 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 				},
 			}
 			
-			// Add registry credentials if needed for private registries
-			if job.Config.RegistryCredentialsPath != "" {
+			// Add Vault integration if vault secrets OR registry credentials are needed
+			if (job.Config.Test != nil && len(job.Config.Test.VaultSecrets) > 0) || job.Config.RegistryCredentialsPath != "" {
 				templates := testTemplates(job)
 				if len(templates) > 0 {
 					mainTask := testJobSpec.TaskGroups[0].Tasks[0]
+
+					// Determine which policies to use
+					var policies []string
+					if job.Config.Test != nil && len(job.Config.Test.VaultPolicies) > 0 {
+						policies = job.Config.Test.VaultPolicies
+					} else {
+						policies = []string{"nomad-build-service"} // Default fallback
+					}
+
 					mainTask.Vault = &nomadapi.Vault{
-						Policies:   []string{"nomad-build-service"},
+						Policies:   policies,
 						ChangeMode: stringPtr("restart"),
 						Role:       "nomad-workloads",
 					}
@@ -467,13 +476,22 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 			},
 		}
 		
-		// Add registry credentials if needed for private registries
-		if job.Config.RegistryCredentialsPath != "" {
+		// Add Vault integration if vault secrets OR registry credentials are needed
+		if (job.Config.Test != nil && len(job.Config.Test.VaultSecrets) > 0) || job.Config.RegistryCredentialsPath != "" {
 			templates := testTemplates(job)
 			if len(templates) > 0 {
 				mainTask := testJobSpec.TaskGroups[0].Tasks[0]
+
+				// Determine which policies to use
+				var policies []string
+				if job.Config.Test != nil && len(job.Config.Test.VaultPolicies) > 0 {
+					policies = job.Config.Test.VaultPolicies
+				} else {
+					policies = []string{"nomad-build-service"} // Default fallback
+				}
+
 				mainTask.Vault = &nomadapi.Vault{
-					Policies:   []string{"nomad-build-service"},
+					Policies:   policies,
 					ChangeMode: stringPtr("restart"),
 					Role:       "nomad-workloads",
 				}
@@ -868,7 +886,7 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 // testTemplates creates Vault templates for the test phase (only registry credentials if needed)
 func testTemplates(job *types.Job) []*nomadapi.Template {
 	var templates []*nomadapi.Template
-	
+
 	// Only add registry credentials template if path is provided and not empty
 	if job.Config.RegistryCredentialsPath != "" {
 		registryTemplate := &nomadapi.Template{
@@ -883,8 +901,35 @@ export REGISTRY_PASSWORD="{{ .Data.data.password }}"
 		}
 		templates = append(templates, registryTemplate)
 	}
-	
+
+	// Add custom vault secrets for test phase
+	if job.Config.Test != nil && len(job.Config.Test.VaultSecrets) > 0 {
+		for i, vaultSecret := range job.Config.Test.VaultSecrets {
+			template := generateVaultSecretTemplate(vaultSecret, i)
+			templates = append(templates, template)
+		}
+	}
+
 	return templates
+}
+
+// generateVaultSecretTemplate creates a Vault template for a custom secret
+func generateVaultSecretTemplate(secret types.VaultSecret, index int) *nomadapi.Template {
+	var tmplData strings.Builder
+	tmplData.WriteString(fmt.Sprintf("{{- with secret \"%s\" -}}\n", secret.Path))
+	
+	for vaultField, envVar := range secret.Fields {
+		tmplData.WriteString(fmt.Sprintf("%s = \"{{ .Data.data.%s }}\"\n", envVar, vaultField))
+	}
+	
+	tmplData.WriteString("{{- end -}}")
+	
+	return &nomadapi.Template{
+		DestPath:     stringPtr(fmt.Sprintf("/secrets/vault-%d.env", index)),
+		ChangeMode:   stringPtr("restart"),
+		EmbeddedTmpl: stringPtr(tmplData.String()),
+		Envvars:      boolPtr(true), // Make secrets available as env vars
+	}
 }
 
 // publishTemplates creates Vault templates for the publish phase (only registry credentials if needed)

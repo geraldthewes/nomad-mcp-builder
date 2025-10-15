@@ -14,11 +14,19 @@ const (
 	StatusFailed     JobStatus = "FAILED"
 )
 
+// VaultSecret defines a Vault secret path and field mappings for environment variables
+type VaultSecret struct {
+	Path   string            `json:"path" yaml:"path"`       // Vault secret path (e.g., "secret/data/aws/transcription")
+	Fields map[string]string `json:"fields" yaml:"fields"`   // Field mappings: {"vault_field": "ENV_VAR_NAME"}
+}
+
 // TestConfig represents test phase configuration
 type TestConfig struct {
 	Commands       []string               `json:"commands,omitempty" yaml:"commands,omitempty"`             // Custom test commands to run
 	EntryPoint     bool                   `json:"entry_point,omitempty" yaml:"entry_point,omitempty"`       // Run the image's default entrypoint/CMD as a test
 	Env            map[string]string      `json:"env,omitempty" yaml:"env,omitempty"`                       // Environment variables for test execution
+	VaultSecrets   []VaultSecret          `json:"vault_secrets,omitempty" yaml:"vault_secrets,omitempty"`   // Vault secrets to inject as environment variables
+	VaultPolicies  []string               `json:"vault_policies,omitempty" yaml:"vault_policies,omitempty"` // Vault policies required to access secrets
 	ResourceLimits *PhaseResourceLimits   `json:"resource_limits,omitempty" yaml:"resource_limits,omitempty"` // Test phase resource limits
 	Timeout        *time.Duration         `json:"timeout,omitempty" yaml:"timeout,omitempty"`               // Test phase timeout
 }
