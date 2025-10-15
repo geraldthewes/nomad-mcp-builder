@@ -38,6 +38,8 @@ Test configuration is specified under the `test` key, which groups all test-rela
 | `test.commands` | array[string] | `[]` | Commands to run in test phase |
 | `test.entry_point` | boolean | `false` | Test container's ENTRYPOINT |
 | `test.env` | map[string]string | `{}` | Environment variables for test containers |
+| `test.vault_policies` | array[string] | `[]` | Vault policies for secret access |
+| `test.vault_secrets` | array[VaultSecret] | `[]` | Vault secrets to inject as env vars |
 | `test.resource_limits` | ResourceLimits | - | Per-test resource overrides |
 | `test.timeout` | duration | `15m` | Maximum test phase duration |
 
@@ -79,6 +81,78 @@ test:
     memory: "4096"
     disk: "10240"
   timeout: 20m
+
+# Test with Vault secrets
+test:
+  entry_point: true
+  vault_policies:
+    - transcription-policy
+  vault_secrets:
+    - path: "secret/data/aws/transcription"
+      fields:
+        access_key_id: "AWS_ACCESS_KEY_ID"
+        secret_access_key: "AWS_SECRET_ACCESS_KEY"
+        region: "AWS_DEFAULT_REGION"
+    - path: "secret/data/ml/tokens"
+      fields:
+        hf_token: "HUGGING_FACE_HUB_TOKEN"
+```
+
+#### Vault Secrets Configuration
+
+**VaultSecret Type**:
+
+Each vault secret has two required fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Vault secret path (KV v2 format: `secret/data/...`) |
+| `fields` | map[string]string | Mapping of Vault fields to environment variables |
+
+**How It Works**:
+
+1. The build service creates Vault templates for each secret source
+2. During test execution, Vault automatically injects secrets as environment variables
+3. Test containers receive the environment variables (e.g., `AWS_ACCESS_KEY_ID`)
+4. Secrets are never logged or exposed in job configurations
+
+**Requirements**:
+
+- `vault_policies` is **required** when `vault_secrets` are specified
+- Vault policies must grant read access to the specified secret paths
+- Secret paths must use Vault KV v2 format (`secret/data/...`)
+- The Nomad cluster must have Vault integration configured
+
+**Common Use Cases**:
+
+```yaml
+# AWS credentials
+test:
+  vault_policies: ["aws-policy"]
+  vault_secrets:
+    - path: "secret/data/aws/s3-credentials"
+      fields:
+        access_key: "AWS_ACCESS_KEY_ID"
+        secret_key: "AWS_SECRET_ACCESS_KEY"
+
+# Machine Learning API tokens
+test:
+  vault_policies: ["ml-api-policy"]
+  vault_secrets:
+    - path: "secret/data/ml/api-keys"
+      fields:
+        openai_key: "OPENAI_API_KEY"
+        anthropic_key: "ANTHROPIC_API_KEY"
+
+# Database credentials
+test:
+  vault_policies: ["database-test-policy"]
+  vault_secrets:
+    - path: "secret/data/postgres/test-db"
+      fields:
+        username: "DB_USER"
+        password: "DB_PASSWORD"
+        host: "DB_HOST"
 ```
 
 ### Resource Limits
@@ -306,6 +380,13 @@ test:
   env:
     NODE_ENV: "production"
     API_URL: "https://api.example.com"
+  vault_policies:
+    - app-secrets-policy
+  vault_secrets:
+    - path: "secret/data/app/credentials"
+      fields:
+        api_key: "APP_API_KEY"
+        db_password: "DB_PASSWORD"
 
 # Resource limits (per-phase)
 resource_limits:
@@ -414,6 +495,49 @@ vault kv put secret/nomad/jobs/registry-credentials \
 
 **Note**: Registry credentials are only needed for **private registries**. Public registries (like Docker Hub for public images) don't require credentials.
 
+### Test Phase Secrets
+
+Store secrets for test containers at paths referenced in `test.vault_secrets`:
+
+```bash
+# AWS credentials for test phase
+vault kv put secret/aws/transcription \
+  access_key_id="AKIA..." \
+  secret_access_key="..." \
+  region="us-east-1"
+
+# ML API tokens
+vault kv put secret/ml/tokens \
+  hf_token="hf_..." \
+  openai_key="sk-..."
+
+# Database credentials
+vault kv put secret/postgres/test-db \
+  username="testuser" \
+  password="testpass" \
+  host="postgres.example.com"
+```
+
+**Important**: Create corresponding Vault policies that grant read access to these paths, and specify those policy names in `test.vault_policies`.
+
+**Example Vault Policy**:
+
+```hcl
+# transcription-policy.hcl
+path "secret/data/aws/transcription" {
+  capabilities = ["read"]
+}
+
+path "secret/data/ml/tokens" {
+  capabilities = ["read"]
+}
+```
+
+Apply the policy:
+```bash
+vault policy write transcription-policy transcription-policy.hcl
+```
+
 ## Field Validation Rules
 
 ### String Fields
@@ -438,6 +562,12 @@ vault kv put secret/nomad/jobs/registry-credentials \
 ### Timeouts
 - **build_timeout**: Valid Go duration string (e.g., `"30m"`, `"1h"`)
 - **test_timeout**: Valid Go duration string
+
+### Vault Secrets
+- **vault_policies**: Required when `vault_secrets` are specified
+- **vault_secrets[].path**: Must be non-empty Vault secret path (KV v2 format)
+- **vault_secrets[].fields**: Must have at least one field mapping
+- **vault_secrets[].fields keys/values**: Both must be non-empty strings
 
 ## CLI Version Management
 
@@ -557,6 +687,7 @@ Understanding the three-phase workflow:
 - Runs Docker container with built image
 - Executes test commands OR tests entrypoint
 - Environment variables from `test.env` are applied to test containers
+- Vault secrets from `test.vault_secrets` are injected as environment variables
 - Multiple test jobs run in parallel if multiple test commands specified
 - Uses resource limits from `test.resource_limits` or `resource_limits.test` or global `resource_limits`
 - Timeout: `test.timeout` or global `test_timeout` (default: 15m)
@@ -640,4 +771,35 @@ webhook_on_failure: true
 webhook_headers:
   X-CI-Project: myservice
   X-CI-Pipeline: production
+```
+
+### With Vault Secrets for Test Phase
+```yaml
+owner: myteam
+repo_url: https://github.com/myorg/ml-service.git
+git_ref: main
+dockerfile_path: Dockerfile
+image_name: ml-service
+image_tags: [v1.0.0]
+registry_url: registry.example.com:5000/myapp
+
+test:
+  entry_point: true
+  env:
+    S3_TRANSCRIBER_BUCKET: "ai-storage"
+    S3_TRANSCRIBER_PREFIX: "transcriber"
+    OLLAMA_HOST: "http://10.0.1.12:11434"
+  vault_policies:
+    - transcription-policy
+    - ml-tokens-policy
+  vault_secrets:
+    - path: "secret/data/aws/transcription"
+      fields:
+        access_key_id: "AWS_ACCESS_KEY_ID"
+        secret_access_key: "AWS_SECRET_ACCESS_KEY"
+        region: "AWS_DEFAULT_REGION"
+    - path: "secret/data/ml/tokens"
+      fields:
+        hf_token: "HUGGING_FACE_HUB_TOKEN"
+        openai_key: "OPENAI_API_KEY"
 ```
