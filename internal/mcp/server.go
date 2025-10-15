@@ -310,6 +310,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	response := types.GetStatusResponse{
 		JobID:   job.ID,
 		Status:  job.Status,
+		Config:  &job.Config, // Include config for debugging
 		Metrics: job.Metrics,
 		Error:   job.Error,
 	}
@@ -1725,6 +1726,7 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request, jobID s
 	response := types.GetStatusResponse{
 		JobID:   updatedJob.ID,
 		Status:  updatedJob.Status,
+		Config:  &updatedJob.Config, // Include config for debugging
 		Metrics: updatedJob.Metrics,
 		Error:   updatedJob.Error,
 	}

@@ -22,6 +22,7 @@ type GetStatusRequest struct {
 type GetStatusResponse struct {
 	JobID   string     `json:"job_id"`
 	Status  JobStatus  `json:"status"`
+	Config  *JobConfig `json:"config,omitempty"` // Include config for debugging
 	Metrics JobMetrics `json:"metrics"`
 	Error   string     `json:"error,omitempty"`
 }
