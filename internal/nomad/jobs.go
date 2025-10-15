@@ -355,7 +355,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 								Name:        "main",
 								Driver:      "docker",
 								Config:      nc.configureTestDockerConfig(job, tempImageName, testCmd),
-								Env:         job.Config.Test.Env, // Add test environment variables
+								Env:         nc.buildTestEnv(job), // Add test environment variables with GPU defaults
 								Resources:   nc.buildTestResources(job, cpu, memory, disk),
 								KillTimeout: &nc.config.Build.KillTimeout,
 								LogConfig: &nomadapi.LogConfig{
@@ -431,7 +431,7 @@ func (nc *Client) createTestJobSpecs(job *types.Job, buildNodeID string) ([]*nom
 							Name:        "main",
 							Driver:      "docker",
 							Config:      nc.configureTestDockerConfig(job, tempImageName, ""), // Empty testCmd for entrypoint
-							Env:         job.Config.Test.Env, // Add test environment variables
+							Env:         nc.buildTestEnv(job), // Add test environment variables with GPU defaults
 							Resources:   nc.buildTestResources(job, cpu, memory, disk),
 							KillTimeout: &nc.config.Build.KillTimeout,
 							LogConfig: &nomadapi.LogConfig{
@@ -954,6 +954,28 @@ func registryHost(imageName string) string {
 }
 
 // buildTestConstraints builds the constraint list for test jobs
+// buildTestEnv builds the environment variable map for test tasks
+// Automatically sets NVIDIA_VISIBLE_DEVICES="all" when gpu_required=true unless user specified it
+func (nc *Client) buildTestEnv(job *types.Job) map[string]string {
+	env := make(map[string]string)
+	
+	// Copy user-provided environment variables
+	if job.Config.Test != nil && job.Config.Test.Env != nil {
+		for k, v := range job.Config.Test.Env {
+			env[k] = v
+		}
+	}
+	
+	// Auto-set NVIDIA_VISIBLE_DEVICES if GPU is required and user didn't specify it
+	if job.Config.Test != nil && job.Config.Test.GPURequired {
+		if _, exists := env["NVIDIA_VISIBLE_DEVICES"]; !exists {
+			env["NVIDIA_VISIBLE_DEVICES"] = "all"
+		}
+	}
+	
+	return env
+}
+
 func (nc *Client) buildTestConstraints(job *types.Job, buildNodeID string) []*nomadapi.Constraint {
 	var constraints []*nomadapi.Constraint
 
@@ -1026,31 +1048,17 @@ func (nc *Client) configureTestDockerConfig(job *types.Job, tempImageName string
 
 // buildTestResources builds the Resources specification for test tasks including GPU devices
 func (nc *Client) buildTestResources(job *types.Job, cpu, memory, disk int) *nomadapi.Resources {
+	// Note: We don't use Nomad's device allocation for GPUs because it requires
+	// the Nvidia device plugin to be configured on Nomad nodes. Instead, we rely on:
+	// 1. Docker's nvidia runtime (set in configureTestDockerConfig)
+	// 2. NVIDIA_VISIBLE_DEVICES env var (set by user in test.env)
+	// This approach works without requiring Nomad device plugins.
+	
 	resources := &nomadapi.Resources{
 		CPU:      intPtr(cpu),
 		MemoryMB: intPtr(memory),
-		DiskMB:   intPtr(disk),
-	}
-
-	// Add GPU device allocation if GPU is required
-	if job.Config.Test != nil && job.Config.Test.GPURequired {
-		gpuCount := job.Config.Test.GPUCount
-		if gpuCount == 0 {
-			gpuCount = 1 // Default to 1 GPU if not specified
-		}
-
-		resources.Devices = []*nomadapi.RequestedDevice{
-			{
-				Name:  "nvidia/gpu",
-				Count: uint64Ptr(uint64(gpuCount)),
-			},
-		}
+		// Note: DiskMB is deprecated in Nomad API - disk is specified at ephemeral_disk level
 	}
 
 	return resources
-}
-
-// uint64Ptr returns a pointer to a uint64
-func uint64Ptr(i uint64) *uint64 {
-	return &i
 }

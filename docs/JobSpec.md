@@ -52,7 +52,7 @@ For GPU-accelerated workloads or specific node targeting, additional test config
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `test.gpu_required` | boolean | `false` | Enable NVIDIA GPU runtime and automatically constrain to GPU-capable nodes |
-| `test.gpu_count` | integer | `0` | Number of GPUs to allocate (0 = use 1 GPU, > 0 = allocate specific count) |
+| `test.gpu_count` | integer | `0` | **Deprecated** - GPU allocation is controlled via `NVIDIA_VISIBLE_DEVICES` env var |
 | `test.constraints` | array[Constraint] | `[]` | Custom Nomad node constraints for test job placement |
 
 **Constraint Type**:
@@ -66,10 +66,13 @@ Each constraint specifies a Nomad node attribute to match:
 | `operand` | string | Comparison operator: `"="`, `"!="`, `"regexp"`, `">="`, `"<="`, etc. |
 
 **GPU Requirements**:
-- GPU-capable Nomad nodes must be configured with NVIDIA device plugins
-- Nodes must have the `meta.gpu-capable = "true"` attribute set
+- GPU-capable Nomad nodes must have the `meta.gpu-capable = "true"` attribute set
 - The Docker driver must support the NVIDIA runtime (`runtime = "nvidia"`)
 - GPU tests automatically get the GPU capability constraint added
+- **GPU allocation** is controlled via environment variables, NOT Nomad device plugins:
+  - `NVIDIA_VISIBLE_DEVICES` defaults to `"all"` when `gpu_required: true`
+  - You can override by setting `NVIDIA_VISIBLE_DEVICES` in `test.env` (e.g., `"0"`, `"0,1"`)
+  - This approach works without requiring Nomad NVIDIA device plugins
 
 **Examples**:
 
@@ -126,11 +129,9 @@ test:
 # GPU-accelerated test (ML/AI workload)
 test:
   entry_point: true
-  gpu_required: true
-  gpu_count: 2  # Allocate 2 GPUs
+  gpu_required: true  # Enables nvidia runtime, constrains to GPU nodes, auto-sets NVIDIA_VISIBLE_DEVICES=all
   env:
-    NVIDIA_VISIBLE_DEVICES: "all"
-    CUDA_VISIBLE_DEVICES: "0,1"
+    CUDA_VISIBLE_DEVICES: "0,1"    # Optional: CUDA-specific GPU selection
   vault_policies:
     - ml-secrets-policy
   vault_secrets:
@@ -931,16 +932,15 @@ registry_url: registry.cluster:5000
 
 test:
   entry_point: true
-  gpu_required: true
-  gpu_count: 1  # Use 1 GPU for testing
+  gpu_required: true  # Enables nvidia runtime + GPU node constraint (auto-sets NVIDIA_VISIBLE_DEVICES=all)
   env:
+    # Application-specific environment variables
     S3_TRANSCRIBER_BUCKET: "ai-storage"
     S3_TRANSCRIBER_PREFIX: "transcriber"
     S3_JOB_ID: "test-job-id"
     OLLAMA_HOST: "http://10.0.1.12:11434"
     AWS_REGION: "us-east-1"
     S3_ENDPOINT: "http://cluster00.cluster"
-    NVIDIA_VISIBLE_DEVICES: "all"
   vault_policies:
     - transcription-policy
   vault_secrets:
@@ -952,7 +952,8 @@ test:
       fields:
         token: "HF_TOKEN"
   resource_limits:
-    cpu: "8000"
-    memory: "16384"
-    disk: "20480"
+    test:
+      cpu: "8000"
+      memory: "16384"
+      disk: "20480"
 ```
