@@ -594,6 +594,16 @@ func (nc *Client) KillJob(job *types.Job) error {
 		}
 	}
 	
+	// Release the build lock since job is being terminated
+	nc.releaseBuildLock(job)
+	
+	// Update job status to FAILED
+	now := time.Now()
+	job.Status = types.StatusFailed
+	job.Error = "Job was killed by user request"
+	job.FinishedAt = &now
+	job.Metrics.JobEnd = &now
+	
 	if len(errors) > 0 {
 		return fmt.Errorf("failed to kill some jobs: %s", strings.Join(errors, ", "))
 	}
@@ -711,6 +721,34 @@ func (nc *Client) getJobStatus(nomadJobID string) (string, error) {
 	// Handle case where job is dead with no allocations (scheduling failure)
 	if *job.Status == "dead" && (allocs == nil || len(allocs) == 0) {
 		return "failed", nil
+	}
+	
+	// Check for placement failures - jobs that are stuck pending
+	// If job has been pending for a long time with no running allocations, it may be unplaceable
+	if *job.Status == "pending" && len(allocs) > 0 {
+		allPending := true
+		for _, alloc := range allocs {
+			if alloc.ClientStatus != "pending" {
+				allPending = false
+				break
+			}
+		}
+		// If all allocations are stuck in pending, check evaluations for placement failures
+		if allPending {
+			evals, _, err := nc.client.Jobs().Evaluations(nomadJobID, nil)
+			if err == nil && len(evals) > 0 {
+				// Check the most recent evaluation
+				for _, eval := range evals {
+					if eval.FailedTGAllocs != nil && len(eval.FailedTGAllocs) > 0 {
+						nc.logger.WithFields(logrus.Fields{
+							"job_id": nomadJobID,
+							"eval_id": eval.ID,
+						}).Warn("Job cannot be placed - placement failures detected")
+						return "failed", nil
+					}
+				}
+			}
+		}
 	}
 	
 	if err == nil && len(allocs) > 0 {
