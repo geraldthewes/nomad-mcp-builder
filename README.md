@@ -70,7 +70,7 @@ cat build.yaml | jobforge submit-job
 
 # Query job status and logs
 jobforge get-status <job-id>
-jobforge get-logs <job-id> [phase]
+jobforge get-logs [options] <job-id>
 
 # Job management
 jobforge kill-job <job-id>
@@ -752,7 +752,8 @@ Usage:
 Commands:
   submit-job <json>     Submit a new build job (JSON from arg or stdin)
   get-status <job-id>   Get status of a job
-  get-logs <job-id> [phase]  Get logs for a job (optional phase: build, test, publish)
+  get-logs [options] <job-id>  Get logs for a job
+                        Options: --phase <phase>  Filter logs by phase (build, test, publish)
   kill-job <job-id>     Kill a running job
   cleanup <job-id>      Clean up resources for a job
   get-history [limit] [offset]  Get job history (optional limit, optional offset)
@@ -816,7 +817,12 @@ jobforge get-status abc123-def456-789
 # Get all logs
 jobforge get-logs abc123-def456-789
 
-# Get logs for specific phase
+# Get logs for specific phase (recommended for large builds)
+jobforge get-logs --phase build abc123-def456-789
+jobforge get-logs --phase test abc123-def456-789
+jobforge get-logs --phase publish abc123-def456-789
+
+# Backward compatible positional syntax also works
 jobforge get-logs abc123-def456-789 build
 jobforge get-logs abc123-def456-789 test
 jobforge get-logs abc123-def456-789 publish

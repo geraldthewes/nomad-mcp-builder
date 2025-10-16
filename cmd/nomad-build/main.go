@@ -33,7 +33,7 @@ COMMANDS:
   Job Management:
     submit-job [options] [config-file]  Submit a new build job
     get-status <job-id>               Get status of a job
-    get-logs <job-id> [phase]         Get logs for a job (phase: build, test, publish)
+    get-logs [options] <job-id>       Get logs for a job
     kill-job <job-id>                 Kill a running job
     cleanup <job-id>                  Clean up resources for a job
     get-history [limit] [offset]      Get job history (default: 10 recent jobs)
@@ -65,6 +65,10 @@ SUBMIT-JOB OPTIONS:
                             When used alone: Records submission only (no final status)
                             With --watch: Records complete build with logs and final status
                             Deploy directory configurable via 'deploy_dir' in YAML (default: ./deploy)
+
+GET-LOGS OPTIONS:
+  --phase <phase>           Get logs for specific phase only (build, test, or publish)
+                            If not specified, returns logs for all phases
 
 YAML CONFIGURATION:
   Global config (deploy/global.yaml) - Shared settings:
@@ -111,7 +115,12 @@ EXAMPLES:
     # Get all logs
     jobforge get-logs abc123
 
-    # Get phase-specific logs
+    # Get phase-specific logs (recommended for large builds)
+    jobforge get-logs --phase build abc123
+    jobforge get-logs --phase test abc123
+    jobforge get-logs --phase publish abc123
+
+    # Backward compatible syntax also works
     jobforge get-logs abc123 build
     jobforge get-logs abc123 test
     jobforge get-logs abc123 publish
@@ -457,14 +466,47 @@ func handleGetStatus(c *client.Client, args []string) error {
 }
 
 func handleGetLogs(c *client.Client, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("job ID required")
+	var phase string
+	var jobID string
+
+	// Parse flags
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--phase" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("--phase flag requires a value")
+			}
+			phase = args[i+1]
+			// Validate phase value
+			if phase != "build" && phase != "test" && phase != "publish" {
+				return fmt.Errorf("invalid phase: %s (must be build, test, or publish)", phase)
+			}
+			i += 2
+		} else if strings.HasPrefix(arg, "--phase=") {
+			phase = strings.TrimPrefix(arg, "--phase=")
+			// Validate phase value
+			if phase != "build" && phase != "test" && phase != "publish" {
+				return fmt.Errorf("invalid phase: %s (must be build, test, or publish)", phase)
+			}
+			i++
+		} else if !strings.HasPrefix(arg, "-") {
+			jobID = arg
+			// For backward compatibility: support positional phase argument
+			if i+1 < len(args) && phase == "" {
+				potentialPhase := args[i+1]
+				if potentialPhase == "build" || potentialPhase == "test" || potentialPhase == "publish" {
+					phase = potentialPhase
+				}
+			}
+			break
+		} else {
+			return fmt.Errorf("unknown flag: %s", arg)
+		}
 	}
 
-	jobID := args[0]
-	phase := ""
-	if len(args) > 1 {
-		phase = args[1]
+	if jobID == "" {
+		return fmt.Errorf("job ID required")
 	}
 
 	response, err := c.GetLogs(jobID, phase)

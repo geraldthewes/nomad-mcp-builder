@@ -895,6 +895,7 @@ func generateVaultSecretTemplate(secret types.VaultSecret, index int) *nomadapi.
 		DestPath:     stringPtr(fmt.Sprintf("secrets/vault-%d.env", index)),
 		ChangeMode:   stringPtr("restart"),
 		EmbeddedTmpl: stringPtr(tmplData.String()),
+		Envvars:      boolPtr(true), // Load secrets as environment variables
 	}
 }
 
