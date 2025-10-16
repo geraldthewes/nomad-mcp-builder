@@ -361,12 +361,31 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 			s.logger.WithError(err).Warn("Failed to update job logs in storage")
 		}
 	}
-	
+
+	// Filter logs by phase if specified
+	var filteredLogs types.JobLogs
+	if req.Phase != "" {
+		switch req.Phase {
+		case "build":
+			filteredLogs = types.JobLogs{Build: logs.Build}
+		case "test":
+			filteredLogs = types.JobLogs{Test: logs.Test}
+		case "publish":
+			filteredLogs = types.JobLogs{Publish: logs.Publish}
+		default:
+			// Invalid phase, return all logs
+			filteredLogs = logs
+		}
+	} else {
+		// No phase filter, return all logs
+		filteredLogs = logs
+	}
+
 	response := types.GetLogsResponse{
 		JobID: job.ID,
-		Logs:  logs,
+		Logs:  filteredLogs,
 	}
-	
+
 	s.writeJSONResponse(w, response)
 }
 
