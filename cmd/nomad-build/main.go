@@ -469,7 +469,7 @@ func handleGetLogs(c *client.Client, args []string) error {
 	var phase string
 	var jobID string
 
-	// Parse flags
+	// Parse all arguments - flags can come before or after job ID
 	i := 0
 	for i < len(args) {
 		arg := args[i]
@@ -491,15 +491,20 @@ func handleGetLogs(c *client.Client, args []string) error {
 			}
 			i++
 		} else if !strings.HasPrefix(arg, "-") {
-			jobID = arg
-			// For backward compatibility: support positional phase argument
-			if i+1 < len(args) && phase == "" {
-				potentialPhase := args[i+1]
-				if potentialPhase == "build" || potentialPhase == "test" || potentialPhase == "publish" {
-					phase = potentialPhase
+			// Non-flag argument - could be job ID or positional phase
+			if jobID == "" {
+				jobID = arg
+				i++
+			} else if phase == "" {
+				// Second non-flag argument could be positional phase (backward compatibility)
+				if arg == "build" || arg == "test" || arg == "publish" {
+					phase = arg
 				}
+				i++
+			} else {
+				// Extra argument - skip
+				i++
 			}
-			break
 		} else {
 			return fmt.Errorf("unknown flag: %s", arg)
 		}
